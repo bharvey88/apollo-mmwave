@@ -1,0 +1,38 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "description": "Set up Apollo mmWave. On first setup an 'Apollo mmWave' dashboard is added to your sidebar with a tuning + zone-mapping tab for each detected Apollo mmWave device. You can turn this off in the integration options, or hide the dashboard from your profile later."
+            }
+        },
+        "abort": {
+            "already_configured": "This entry is already configured."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Apollo mmWave options",
+                "description": "Configure dashboard behavior.",
+                "data": {
+                    "auto_create_view": "Auto-create the Apollo mmWave dashboard"
+                },
+                "data_description": {
+                    "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually."
+                }
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "apollo_mmwave": {
+                "name": "Sensor"
+            }
+        },
+        "binary_sensor": {
+            "apollo_mmwave": {
+                "name": "Binary sensor"
+            }
+        }
+    }
+}

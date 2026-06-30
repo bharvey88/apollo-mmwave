@@ -1,0 +1,40 @@
+# artifacts
+__pycache__
+.pytest*
+*.egg-info
+*/build/*
+*/dist/*
+.venv
+
+# frontend build tooling (source lives in frontend-src/, the built bundles in
+# custom_components/apollo_mmwave/www/ ARE committed so the integration ships them)
+frontend-src/node_modules
+frontend-src/.vite
+
+
+# misc
+.coverage
+.vscode
+coverage.xml
+.ruff_cache
+uv.lock
+
+
+# Home Assistant configuration
+config/*
+!config/configuration.yaml
+
+# Home Assistant database and logs
+*.db
+*.db-shm
+*.db-wal
+*.log
+home-assistant.log*
+home-assistant_v2.db*
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+.github/copilot-instructions.md

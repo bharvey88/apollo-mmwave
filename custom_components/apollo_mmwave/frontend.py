@@ -16,21 +16,27 @@ This integration ships its own Lovelace frontend so users install ONE thing:
    building one tab per device, so the dashboard self-updates as devices come
    and go (no one-time seeding, no stored card layout to drift).
 
-Lovelace internals (``hass.data[LOVELACE_DATA].dashboards``, ``LovelaceConfig``)
-are not a public contract, so they're imported lazily *inside* the dashboard
-function and the whole thing is wrapped defensively: if the shape ever changes
-we log and continue without the auto-dashboard rather than breaking setup or the
-config flow.
+Lovelace internals (``hass.data[LOVELACE_DATA].dashboards``) are not a public
+contract, so dashboard registration is wrapped defensively: if the shape ever
+changes we log and continue without the auto-dashboard rather than breaking
+setup.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, override
 
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.lovelace.const import (
+    CONF_URL_PATH,
+    LOVELACE_DATA,
+    MODE_STORAGE,
+)
+from homeassistant.components.lovelace.dashboard import LovelaceConfig
+from homeassistant.helpers.json import json_bytes, json_fragment
 from homeassistant.loader import async_get_integration
 
 from .const import (
@@ -51,7 +57,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _frontend_path() -> Path:
-    """Absolute path to the bundled ``www`` directory."""
+    """Return the absolute path to the bundled ``www`` directory."""
     return Path(__file__).parent / FRONTEND_DIR
 
 
@@ -75,7 +81,7 @@ async def async_register_frontend_assets(hass: HomeAssistant) -> None:
             )
             continue
         static_paths.append(
-            StaticPathConfig(f"{STATIC_URL_BASE}/{name}", str(file_path), True)
+            StaticPathConfig(f"{STATIC_URL_BASE}/{name}", str(file_path), True)  # noqa: FBT003
         )
         js_urls.append(f"{STATIC_URL_BASE}/{name}?v={version}")
 
@@ -85,24 +91,50 @@ async def async_register_frontend_assets(hass: HomeAssistant) -> None:
         frontend.add_extra_js_url(hass, url)
 
 
+class StrategyDashboardConfig(LovelaceConfig):
+    """
+    A read-only Lovelace dashboard whose config is a single strategy.
+
+    The frontend asks the ``lovelace`` websocket for this dashboard's config,
+    which returns ``{"strategy": {"type": DASHBOARD_STRATEGY_TYPE}}``. The custom
+    dashboard strategy then generates the views client-side on every load.
+    """
+
+    def __init__(self, hass: HomeAssistant, url_path: str, strategy_type: str) -> None:
+        """Initialize with the url path and strategy type to serve."""
+        super().__init__(hass, url_path, {CONF_URL_PATH: url_path})
+        self._strategy_config: dict[str, Any] = {"strategy": {"type": strategy_type}}
+
+    @property
+    @override
+    def mode(self) -> str:
+        """Report storage mode so the frontend renders it as a normal dashboard."""
+        return MODE_STORAGE
+
+    @override
+    async def async_get_info(self) -> dict[str, Any]:
+        """Return minimal config info (a strategy generates the views)."""
+        return {"mode": self.mode}
+
+    @override
+    async def async_load(self, force: bool) -> dict[str, Any]:
+        """Return the strategy dashboard config."""
+        return self._strategy_config
+
+    @override
+    async def async_json(self, force: bool) -> json_fragment:
+        """Return the JSON representation of the strategy config."""
+        return json_fragment(json_bytes(self._strategy_config))
+
+
 async def async_register_dashboard(hass: HomeAssistant) -> bool:
     """
     Register the dedicated, strategy-backed "Apollo mmWave" sidebar dashboard.
 
     Returns True if the dashboard is present (newly registered or already there),
     False if the Lovelace environment wasn't ready and we should retry later.
-
-    Lovelace internals are imported here (not at module top) so a change to them
-    can never stop the integration — or its config flow — from loading.
     """
     try:
-        from homeassistant.components.lovelace.const import (
-            LOVELACE_DATA,
-            MODE_STORAGE,
-        )
-        from homeassistant.components.lovelace.dashboard import LovelaceConfig
-        from homeassistant.helpers.json import json_bytes, json_fragment
-
         lovelace_data = hass.data.get(LOVELACE_DATA)
         if lovelace_data is None:
             _LOGGER.debug("Apollo mmWave: lovelace data not available yet.")
@@ -120,33 +152,9 @@ async def async_register_dashboard(hass: HomeAssistant) -> bool:
             _LOGGER.debug("Apollo mmWave: dashboard already registered.")
             return True
 
-        strategy_config = {"strategy": {"type": DASHBOARD_STRATEGY_TYPE}}
-
-        class StrategyDashboardConfig(LovelaceConfig):
-            """Read-only Lovelace dashboard whose config is a single strategy.
-
-            The frontend asks the ``lovelace`` websocket for this dashboard's
-            config, which returns ``{"strategy": {...}}``; the custom dashboard
-            strategy then generates the views client-side on every load.
-            """
-
-            def __init__(self) -> None:
-                super().__init__(hass, DASHBOARD_URL_PATH, {"url_path": DASHBOARD_URL_PATH})
-
-            @property
-            def mode(self) -> str:
-                return MODE_STORAGE
-
-            async def async_get_info(self):
-                return {"mode": self.mode}
-
-            async def async_load(self, force: bool):
-                return strategy_config
-
-            async def async_json(self, force: bool):
-                return json_fragment(json_bytes(strategy_config))
-
-        dashboards[DASHBOARD_URL_PATH] = StrategyDashboardConfig()
+        dashboards[DASHBOARD_URL_PATH] = StrategyDashboardConfig(
+            hass, DASHBOARD_URL_PATH, DASHBOARD_STRATEGY_TYPE
+        )
 
         if not frontend.async_panel_exists(hass, DASHBOARD_URL_PATH):
             frontend.async_register_built_in_panel(

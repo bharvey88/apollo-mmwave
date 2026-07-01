@@ -59,7 +59,10 @@ from .const import (
     WARN_RECT_INVALID,
     WARN_RECT_NON_NUM,
 )
-from .frontend import async_register_dashboard, async_register_frontend_assets
+
+# NOTE: `.frontend` is imported lazily inside the setup path (not here) so that
+# importing this package for the config flow doesn't pull in Lovelace internals
+# in the event loop (avoids the blocking-import warning).
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -499,7 +502,8 @@ def _auto_create_dashboard_enabled(entry: ConfigEntry) -> bool:
 async def _schedule_dashboard_registration(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Register the dedicated Apollo mmWave dashboard once Lovelace is ready.
+    """
+    Register the dedicated Apollo mmWave dashboard once Lovelace is ready.
 
     Unlike the old seed-into-default approach this is idempotent: the dashboard
     is (re)registered on every startup, so there is no one-time flag to track.
@@ -511,6 +515,12 @@ async def _schedule_dashboard_registration(
     async def _run(_event: Event | None = None) -> None:
         if not _auto_create_dashboard_enabled(entry):
             return
+        # Lazy import: keeps Lovelace internals out of the config-flow import path.
+        from .frontend import (  # noqa: PLC0415
+            async_register_dashboard,
+            async_register_frontend_assets,
+        )
+
         await async_register_frontend_assets(hass)
         await async_register_dashboard(hass)
 

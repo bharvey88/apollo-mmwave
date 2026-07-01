@@ -9,9 +9,6 @@ on:
       - Main
       - main
   pull_request:
-    branches:
-      - Main
-      - main
 
 permissions: {}
 

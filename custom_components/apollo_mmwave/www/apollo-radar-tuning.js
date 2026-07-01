@@ -30,7 +30,7 @@ const r$4 = (t2) => new n$3("string" == typeof t2 ? t2 : t2 + "", void 0, s$2), 
     throw Error("Value passed to 'css' function must be a 'css' function result: " + t3 + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
   })(s2) + t2[o3 + 1], t2[0]);
   return new n$3(o2, t2, s$2);
-}, S$1 = (s2, o2) => {
+}, S$2 = (s2, o2) => {
   if (e$2) s2.adoptedStyleSheets = o2.map((t2) => t2 instanceof CSSStyleSheet ? t2 : t2.styleSheet);
   else for (const e2 of o2) {
     const o3 = document.createElement("style"), n3 = t$1.litNonce;
@@ -160,7 +160,7 @@ let y$1 = class y extends HTMLElement {
   }
   createRenderRoot() {
     const t2 = this.shadowRoot ?? this.attachShadow(this.constructor.shadowRootOptions);
-    return S$1(t2, this.constructor.elementStyles), t2;
+    return S$2(t2, this.constructor.elementStyles), t2;
   }
   connectedCallback() {
     var _a2;
@@ -303,7 +303,7 @@ const N = (t2, i2) => {
   }
   return [V(t2, l2 + (t2[s2] || "<?>") + (2 === i2 ? "</svg>" : 3 === i2 ? "</math>" : "")), e2];
 };
-class S {
+let S$1 = class S {
   constructor({ strings: t2, _$litType$: i2 }, e2) {
     let r2;
     this.parts = [];
@@ -339,7 +339,7 @@ class S {
     const s2 = l.createElement("template");
     return s2.innerHTML = t2, s2;
   }
-}
+};
 function M(t2, i2, s2 = t2, e2) {
   var _a2, _b;
   if (i2 === E) return i2;
@@ -408,7 +408,7 @@ class k {
   }
   $(t2) {
     var _a2;
-    const { values: i2, _$litType$: s2 } = t2, e2 = "number" == typeof s2 ? this._$AC(t2) : (void 0 === s2.el && (s2.el = S.createElement(V(s2.h, s2.h[0]), this.options)), s2);
+    const { values: i2, _$litType$: s2 } = t2, e2 = "number" == typeof s2 ? this._$AC(t2) : (void 0 === s2.el && (s2.el = S$1.createElement(V(s2.h, s2.h[0]), this.options)), s2);
     if (((_a2 = this._$AH) == null ? void 0 : _a2._$AD) === e2) this._$AH.p(i2);
     else {
       const t3 = new R(e2, this), s3 = t3.u(this.options);
@@ -417,7 +417,7 @@ class k {
   }
   _$AC(t2) {
     let i2 = C.get(t2.strings);
-    return void 0 === i2 && C.set(t2.strings, i2 = new S(t2)), i2;
+    return void 0 === i2 && C.set(t2.strings, i2 = new S$1(t2)), i2;
   }
   k(t2) {
     u(this._$AH) || (this._$AH = [], this._$AR());
@@ -505,7 +505,7 @@ class Z {
   }
 }
 const B = t.litHtmlPolyfillSupport;
-B == null ? void 0 : B(S, k), (t.litHtmlVersions ?? (t.litHtmlVersions = [])).push("3.3.3");
+B == null ? void 0 : B(S$1, k), (t.litHtmlVersions ?? (t.litHtmlVersions = [])).push("3.3.3");
 const D = (t2, i2, s2) => {
   const e2 = (s2 == null ? void 0 : s2.renderBefore) ?? i2;
   let h2 = e2._$litPart$;
@@ -683,6 +683,19 @@ const LD2412_PROFILE = {
   }
 };
 const PROFILES = [LD2412_PROFILE, LD2410_PROFILE];
+const APOLLO_MODELS = [
+  { prefix: "msr-1", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "msr-2", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "mtr-1", ld2450: true },
+  { prefix: "r-pro-1", profile: LD2412_PROFILE, ld2450: true }
+];
+function apolloModelInfo(device) {
+  if (!(device == null ? void 0 : device.manufacturer) || !device.model) return void 0;
+  if (device.manufacturer.toLowerCase() !== "apolloautomation") return void 0;
+  const model = device.model.toLowerCase();
+  const hit = APOLLO_MODELS.find((m2) => model.startsWith(m2.prefix));
+  return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : void 0;
+}
 function detectProfile(hass, base) {
   for (const p2 of PROFILES) {
     const id = p2.entityMap(base).engineering_mode;
@@ -743,6 +756,108 @@ function baseNameFromDevice(hass, deviceId) {
   }
   return best;
 }
+const DEDUP = "(?:_\\d+)?$";
+const S2 = (slot, domain, suffix) => ({
+  slot,
+  domain,
+  re: new RegExp(suffix + DEDUP)
+});
+const SCALAR_PATTERNS = [
+  // LD2410 (MSR) naming.
+  S2("engineering_mode", "switch", "_radar_engineering_mode"),
+  S2("bluetooth", "switch", "_ld2410_bluetooth"),
+  S2("restart_radar", "button", "_restart_radar"),
+  S2("factory_reset_radar", "button", "_factory_reset_radar"),
+  S2("esp_reboot", "button", "_esp_reboot"),
+  S2("radar_timeout", "number", "_radar_timeout"),
+  S2("zone_1_start", "number", "_radar_zone_1_start"),
+  S2("end_zone_1", "number", "_radar_end_zone_1"),
+  S2("end_zone_2", "number", "_radar_end_zone_2"),
+  S2("end_zone_3", "number", "_radar_end_zone_3"),
+  S2("max_move_distance", "number", "_radar_max_move_distance"),
+  S2("max_still_distance", "number", "_radar_max_still_distance"),
+  S2("gate_size", "select", "_ld2410_gate_size"),
+  S2("still_distance", "sensor", "_radar_still_distance"),
+  S2("moving_distance", "sensor", "_radar_moving_distance"),
+  S2("detection_distance", "sensor", "_radar_detection_distance"),
+  S2("moving_target", "binary_sensor", "_radar_moving_target"),
+  S2("still_target", "binary_sensor", "_radar_still_target"),
+  S2("radar_target", "binary_sensor", "_radar_target"),
+  S2("zone_1_occupancy", "binary_sensor", "_radar_zone_1_occupancy"),
+  S2("zone_2_occupancy", "binary_sensor", "_radar_zone_2_occupancy"),
+  S2("zone_3_occupancy", "binary_sensor", "_radar_zone_3_occupancy"),
+  // LD2412 (R-PRO) naming.
+  S2("engineering_mode", "switch", "_ld2412_engineering_mode"),
+  S2("bluetooth", "switch", "_ld2412_bluetooth"),
+  S2("restart_radar", "button", "_ld2412_restart"),
+  S2("factory_reset_radar", "button", "_ld2412_factory_reset"),
+  S2("radar_timeout", "number", "_ld2412_timeout"),
+  S2("max_move_distance", "number", "_ld2412_max_distance_gate"),
+  S2("max_still_distance", "number", "_ld2412_min_distance_gate"),
+  S2("gate_size", "select", "_ld2412_distance_resolution"),
+  S2("radar_target", "binary_sensor", "_ld2412_presence"),
+  S2("moving_target", "binary_sensor", "_ld2412_moving_target"),
+  S2("still_target", "binary_sensor", "_ld2412_still_target")
+];
+const GATE_PATTERNS = [
+  ["move_threshold", "number"],
+  ["still_threshold", "number"],
+  ["move_energy", "sensor"],
+  ["still_energy", "sensor"]
+].map(([slot, domain]) => ({
+  slot,
+  domain,
+  re: new RegExp(`_g(\\d+)_${slot}${DEDUP}`)
+}));
+function classifyObjectId(domain, objectId) {
+  for (const p2 of GATE_PATTERNS) {
+    const m2 = p2.re.exec(objectId);
+    if (m2) return domain === p2.domain ? { slot: p2.slot, gate: parseInt(m2[1], 10) } : void 0;
+  }
+  for (const p2 of SCALAR_PATTERNS) {
+    if (p2.re.test(objectId)) {
+      return domain === p2.domain ? { slot: p2.slot } : void 0;
+    }
+  }
+  return void 0;
+}
+const LD2410_MARKERS = [
+  /_ld2410_/,
+  new RegExp(`_radar_engineering_mode${DEDUP}`),
+  new RegExp(`_g\\d+_(?:move|still)_(?:threshold|energy)${DEDUP}`),
+  new RegExp(`_radar_max_(?:move|still)_distance${DEDUP}`)
+];
+function detectProfileFromEntities(hass, deviceId) {
+  let sawLd2410 = false;
+  for (const [id, e2] of Object.entries(hass.entities)) {
+    if (e2.device_id !== deviceId) continue;
+    const oid = id.slice(id.indexOf(".") + 1);
+    if (/_ld2412_/.test(oid)) return LD2412_PROFILE;
+    if (!sawLd2410) sawLd2410 = LD2410_MARKERS.some((re) => re.test(oid));
+  }
+  return sawLd2410 ? LD2410_PROFILE : void 0;
+}
+function entityMapFromDevice(hass, deviceId) {
+  const map = emptyMap();
+  let matched = false;
+  for (const [id, e2] of Object.entries(hass.entities)) {
+    if (e2.device_id !== deviceId) continue;
+    const dot = id.indexOf(".");
+    const c2 = classifyObjectId(id.slice(0, dot), id.slice(dot + 1));
+    if (!c2) continue;
+    if ("gate" in c2) {
+      const arr = map[c2.slot];
+      if (arr[c2.gate] === void 0) {
+        arr[c2.gate] = id;
+        matched = true;
+      }
+    } else if (map[c2.slot] === void 0) {
+      map[c2.slot] = id;
+      matched = true;
+    }
+  }
+  return matched ? map : void 0;
+}
 function resolveBase(hass, config) {
   let base;
   if (config.device_id) base = baseNameFromDevice(hass, config.device_id);
@@ -750,6 +865,12 @@ function resolveBase(hass, config) {
   return base;
 }
 function resolveProfile(hass, config) {
+  if (config.device_id) {
+    const fromEntities = detectProfileFromEntities(hass, config.device_id);
+    if (fromEntities) return fromEntities;
+    const reg = apolloModelInfo(hass.devices[config.device_id]);
+    if (reg) return reg.profile;
+  }
   const base = resolveBase(hass, config);
   if (!base) return void 0;
   return detectProfile(hass, base) ?? LD2410_PROFILE;
@@ -763,9 +884,13 @@ function emptyMap() {
   };
 }
 function resolveEntities(hass, config) {
-  const base = resolveBase(hass, config);
-  const profile = base ? detectProfile(hass, base) ?? LD2410_PROFILE : void 0;
-  const resolved = base && profile ? profile.entityMap(base) : emptyMap();
+  let resolved;
+  if (config.device_id) resolved = entityMapFromDevice(hass, config.device_id);
+  if (!resolved) {
+    const base = resolveBase(hass, config);
+    const profile = base ? detectProfile(hass, base) ?? LD2410_PROFILE : void 0;
+    resolved = base && profile ? profile.entityMap(base) : emptyMap();
+  }
   if (config.entities) {
     return { ...resolved, ...config.entities };
   }
@@ -773,6 +898,36 @@ function resolveEntities(hass, config) {
 }
 function exists(hass, id) {
   return !!id && id in hass.states;
+}
+function entityIds(m2) {
+  const out = [];
+  for (const v2 of Object.values(m2)) {
+    if (typeof v2 === "string") out.push(v2);
+    else if (Array.isArray(v2)) {
+      for (const id of v2) if (id) out.push(id);
+    }
+  }
+  return out;
+}
+function resolveRadar(cache, hass, config) {
+  if (cache && cache.config === config && cache.entities === hass.entities && cache.devices === hass.devices) {
+    return cache;
+  }
+  const map = resolveEntities(hass, config);
+  return {
+    config,
+    entities: hass.entities,
+    devices: hass.devices,
+    map,
+    profile: resolveProfile(hass, config),
+    ids: entityIds(map)
+  };
+}
+function resolvedStatesChanged(oldHass, newHass, ids) {
+  return ids.some((id) => oldHass.states[id] !== newHass.states[id]);
+}
+function anyResolved(hass, ids) {
+  return ids.some((id) => id in hass.states);
 }
 const VALID_UOMS = ["mm", "cm", "m", "in", "ft", "yd"];
 const METERS_PER = {
@@ -1026,10 +1181,22 @@ const _ApolloLd2410DistanceCard = class _ApolloLd2410DistanceCard extends i {
   static getStubConfig() {
     return { type: "custom:apollo-radar-distance-card" };
   }
+  /** Skip the hass ticks (most of them) that touch none of our entities. */
+  shouldUpdate(changed) {
+    if (!changed.has("hass") || changed.has("_config")) return true;
+    const oldHass = changed.get("hass");
+    if (!oldHass || !this.hass || !this._config) return true;
+    if (oldHass.entities !== this.hass.entities || oldHass.devices !== this.hass.devices || oldHass.config !== this.hass.config) {
+      return true;
+    }
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    return resolvedStatesChanged(oldHass, this.hass, this._resolved.ids);
+  }
   render() {
     if (!this.hass || !this._config) return A;
-    const m2 = resolveEntities(this.hass, this._config);
-    const profile = resolveProfile(this.hass, this._config);
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    const { map: m2, profile, ids } = this._resolved;
+    if (!anyResolved(this.hass, ids)) return this._renderNotFound();
     const unit = isValidUom(this._config.distance_unit) ? this._config.distance_unit : defaultDistanceUnit(this.hass);
     const chart = renderDistanceChart(this.hass, m2, unit, profile == null ? void 0 : profile.maxBarLabels);
     if (chart === A) return A;
@@ -1039,10 +1206,26 @@ const _ApolloLd2410DistanceCard = class _ApolloLd2410DistanceCard extends i {
       </ha-card>
     `;
   }
+  _renderNotFound() {
+    var _a2;
+    return b`
+      <ha-card .header=${((_a2 = this._config) == null ? void 0 : _a2.title) ?? "LD2410 Distances"}>
+        <div class="not-found">
+          Apollo mmWave: device not found — check the card's device
+          configuration.
+        </div>
+      </ha-card>
+    `;
+  }
 };
 _ApolloLd2410DistanceCard.styles = i$3`
     .wrap {
       padding: 4px 12px 12px;
+    }
+    .not-found {
+      padding: 12px 16px 16px;
+      color: var(--error-color, #db4437);
+      font-size: 0.9em;
     }
   `;
 let ApolloLd2410DistanceCard = _ApolloLd2410DistanceCard;
@@ -1189,9 +1372,22 @@ const _ApolloLd2410GateEnergyCard = class _ApolloLd2410GateEnergyCard extends i 
   static getStubConfig() {
     return { type: "custom:apollo-radar-gate-energy-card" };
   }
+  /** Skip the hass ticks (most of them) that touch none of our entities. */
+  shouldUpdate(changed) {
+    if (!changed.has("hass") || changed.has("_config")) return true;
+    const oldHass = changed.get("hass");
+    if (!oldHass || !this.hass || !this._config) return true;
+    if (oldHass.entities !== this.hass.entities || oldHass.devices !== this.hass.devices) {
+      return true;
+    }
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    return resolvedStatesChanged(oldHass, this.hass, this._resolved.ids);
+  }
   render() {
     if (!this.hass || !this._config) return A;
-    const m2 = resolveEntities(this.hass, this._config);
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    const { map: m2, ids } = this._resolved;
+    if (!anyResolved(this.hass, ids)) return this._renderNotFound();
     const chart = renderGateEnergyChart(this.hass, m2);
     if (chart === A) return A;
     return b`
@@ -1200,10 +1396,26 @@ const _ApolloLd2410GateEnergyCard = class _ApolloLd2410GateEnergyCard extends i 
       </ha-card>
     `;
   }
+  _renderNotFound() {
+    var _a2;
+    return b`
+      <ha-card .header=${((_a2 = this._config) == null ? void 0 : _a2.title) ?? "LD2410 Gate Energy"}>
+        <div class="not-found">
+          Apollo mmWave: device not found — check the card's device
+          configuration.
+        </div>
+      </ha-card>
+    `;
+  }
 };
 _ApolloLd2410GateEnergyCard.styles = i$3`
     .wrap {
       padding: 4px 12px 12px;
+    }
+    .not-found {
+      padding: 12px 16px 16px;
+      color: var(--error-color, #db4437);
+      font-size: 0.9em;
     }
     .chart-legend {
       font-size: 0.8em;
@@ -1238,6 +1450,14 @@ function ld2450TargetPairs(base) {
     x: `sensor.${base}_ld2450_target_${n3}_x`,
     y: `sensor.${base}_ld2450_target_${n3}_y`
   }));
+}
+const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
+function hasLd2450Device(hass, deviceId) {
+  for (const [id, e2] of Object.entries(hass.entities)) {
+    if (e2.device_id !== deviceId || !id.startsWith("sensor.")) continue;
+    if (TARGET_X.test(id.slice(id.indexOf(".") + 1))) return true;
+  }
+  return false;
 }
 function hasLd2450(hass, base) {
   return ld2450TargetPairs(base).some((p2) => p2.x in hass.states);
@@ -1315,17 +1535,24 @@ function historyEntities(m2) {
   push(m2.zone_3_occupancy, "Zone 3");
   return rows;
 }
+function deviceHasEntities(hass, deviceId) {
+  return Object.values(hass.entities).some((e2) => e2.device_id === deviceId);
+}
 function deviceFromId(hass, deviceId) {
-  const base = baseNameFromDevice(hass, deviceId);
-  if (!base) return void 0;
-  const profile = detectProfile(hass, base);
-  const ld2450 = hasLd2450(hass, base);
-  if (!profile && !ld2450) return void 0;
   const d2 = hass.devices[deviceId];
+  const reg = apolloModelInfo(d2);
+  if (reg && !deviceHasEntities(hass, deviceId)) return void 0;
+  const base = baseNameFromDevice(hass, deviceId);
+  if (!reg && !base) return void 0;
+  const profile = detectProfileFromEntities(hass, deviceId) ?? (reg == null ? void 0 : reg.profile);
+  const ld2450 = hasLd2450Device(hass, deviceId) || (base ? hasLd2450(hass, base) : false) || ((reg == null ? void 0 : reg.ld2450) ?? false);
+  if (!profile && !ld2450) return void 0;
   return {
     deviceId,
-    base,
-    name: (d2 == null ? void 0 : d2.name_by_user) || (d2 == null ? void 0 : d2.name) || base,
+    // The base doubles as the view path, so a registry-matched device whose
+    // entity names yield no base still needs a stable unique key.
+    base: base ?? deviceId,
+    name: (d2 == null ? void 0 : d2.name_by_user) || (d2 == null ? void 0 : d2.name) || base || deviceId,
     profile,
     ld2450
   };
@@ -1377,7 +1604,7 @@ function cardMap(hass, dev, distanceUnit) {
   const cards = { help: helpCard(dev) };
   if (dev.profile) {
     const profile = dev.profile;
-    const m2 = profile.entityMap(dev.base);
+    const m2 = entityMapFromDevice(hass, dev.deviceId) ?? profile.entityMap(dev.base);
     const label = profile.label;
     const historyRows = historyEntities(m2).filter((r2) => r2.entity in hass.states);
     const range = entitiesCard(
@@ -1404,12 +1631,14 @@ function cardMap(hass, dev, distanceUnit) {
     );
     cards.distance = {
       type: "custom:apollo-radar-distance-card",
+      device_id: dev.deviceId,
       device_base_name: dev.base,
       title: `${label} Distances`,
       ...distanceUnit ? { distance_unit: distanceUnit } : {}
     };
     cards.gateEnergy = {
       type: "custom:apollo-radar-gate-energy-card",
+      device_id: dev.deviceId,
       device_base_name: dev.base,
       title: `${label} Gate Energy`
     };
@@ -1571,7 +1800,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

@@ -6,19 +6,20 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.discovery import async_load_platform
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import slugify
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine, Iterable
+    from collections.abc import Callable, Coroutine
 
     from homeassistant.config_entries import ConfigEntry
-    from homeassistant.core import Event, HomeAssistant, ServiceCall
+    from homeassistant.core import HomeAssistant, ServiceCall
     from homeassistant.helpers.typing import ConfigType
+
+    from .store import ZoneStore
 
 from .const import (
     ATTR_CX,
@@ -36,8 +37,7 @@ from .const import (
     ATTR_Y_MIN,
     CONF_AUTO_CREATE_VIEW,
     COORD_SENSOR_UNIQUE_ID_FMT,
-    DATA_LOCATIONS,
-    DATA_PLATFORMS_LOADED,
+    DATA_STORE,
     DEFAULT_AUTO_CREATE_VIEW,
     DOMAIN,
     EVENT_ZONE_UPDATED,
@@ -49,6 +49,7 @@ from .const import (
     SHAPE_NONE,
     SHAPE_POLYGON,
     SHAPE_RECT,
+    SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
     STORE_ZONES,
     SUPPORTED_SHAPES,
@@ -66,65 +67,14 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 
-def _slugify_location(location: str) -> str:
-    return slugify(str(location))
-
-
-def _get_integration_data(hass: HomeAssistant) -> dict[str, Any]:
-    data = hass.data.setdefault(DOMAIN, {})
-    data.setdefault(DATA_LOCATIONS, {})
-    data.setdefault(DATA_PLATFORMS_LOADED, set())
-    return data
-
-
-def _ensure_location_store(hass: HomeAssistant, location: str) -> dict[str, Any]:
-    integration = _get_integration_data(hass)
-    locations = integration[DATA_LOCATIONS]
-    return locations.setdefault(location, {STORE_ZONES: {}, STORE_ENTITIES: []})
-
-
-def _parse_sensor_unique_id(unique_id: str) -> tuple[str, int] | None:
-    if not unique_id.startswith("apollo_mmwave_") or "_zone_" not in unique_id:
-        return None
-    slug_and_zone = unique_id[len("apollo_mmwave_") :]
-    slug, zone_str = slug_and_zone.rsplit("_zone_", 1)
-    try:
-        zone_id = int(zone_str)
-    except (TypeError, ValueError):
-        return None
-    return slug, zone_id
-
-
-def _derive_location_name(entry: er.RegistryEntry, fallback_slug: str) -> str:
-    name_candidates: Iterable[str | None] = (entry.original_name, entry.name)
-    for candidate in name_candidates:
-        if not isinstance(candidate, str):
-            continue
-        if not candidate.startswith("Zone Mapper ") or " Zone " not in candidate:
-            continue
-        location = candidate[len("Zone Mapper ") : candidate.rfind(" Zone ")]
-        if location:
-            return location
-    return fallback_slug
-
-
-def _normalize_entities(entities: Any) -> list[dict[str, str]] | None:
-    if entities is None:
-        return None
-    if not isinstance(entities, list):
-        return None
-    normalized: list[dict[str, str]] = []
-    for pair in entities:
-        if not isinstance(pair, dict):
-            continue
-        x_id = pair.get("x")
-        y_id = pair.get("y")
-        if isinstance(x_id, str) and isinstance(y_id, str):
-            normalized.append({"x": x_id, "y": y_id})
-    return normalized
+def get_store(hass: HomeAssistant) -> ZoneStore:
+    """Return the loaded ZoneStore (setup guarantees it exists)."""
+    return hass.data[DOMAIN][DATA_STORE]
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -152,6 +102,22 @@ def _coerce_zone_name(name: Any) -> str | None:
     if isinstance(name, str):
         return name
     return str(name)
+
+
+def _normalize_entities(entities: Any) -> list[dict[str, str]] | None:
+    if entities is None:
+        return None
+    if not isinstance(entities, list):
+        return None
+    normalized: list[dict[str, str]] = []
+    for pair in entities:
+        if not isinstance(pair, dict):
+            continue
+        x_id = pair.get("x")
+        y_id = pair.get("y")
+        if isinstance(x_id, str) and isinstance(y_id, str):
+            normalized.append({"x": x_id, "y": y_id})
+    return normalized
 
 
 def _normalize_zone_payload(
@@ -207,15 +173,11 @@ def _normalize_ellipse(data: Any, zone_id: int, location: str) -> dict[str, Any]
     if rx <= 0 or ry <= 0:
         _LOGGER.warning(WARN_ELLIPSE_NON_POSITIVE, zone_id, location)
         return None
-    cx_i = round(cx)
-    cy_i = round(cy)
-    rx_i = max(1, round(rx))
-    ry_i = max(1, round(ry))
     return {
-        ATTR_CX: cx_i,
-        ATTR_CY: cy_i,
-        ATTR_RX: rx_i,
-        ATTR_RY: ry_i,
+        ATTR_CX: round(cx),
+        ATTR_CY: round(cy),
+        ATTR_RX: max(1, round(rx)),
+        ATTR_RY: max(1, round(ry)),
     }
 
 
@@ -240,72 +202,45 @@ def _normalize_polygon(data: Any, zone_id: int, location: str) -> dict[str, Any]
         y_float = _coerce_float(point.get("y"))
         if x_float is None or y_float is None:
             continue
-        x_val = round(x_float)
-        y_val = round(y_float)
-        normalized_points.append({"x": x_val, "y": y_val})
+        normalized_points.append({"x": round(x_float), "y": round(y_float)})
     if len(normalized_points) < POLYGON_MIN_POINTS:
         _LOGGER.warning(WARN_POLY_INSUFFICIENT, zone_id, location)
         return None
     return {**data, ATTR_POINTS: normalized_points}
 
 
+def _zone_entity_unique_ids(location: str, zone_id: int) -> tuple[str, str]:
+    safe_location = slugify(str(location))
+    return (
+        COORD_SENSOR_UNIQUE_ID_FMT.format(location=safe_location, zone_id=zone_id),
+        PRESENCE_SENSOR_UNIQUE_ID_FMT.format(location=safe_location, zone_id=zone_id),
+    )
+
+
 def _update_registry_names(
     hass: HomeAssistant, location: str, zone_id: int, zone_name: str
 ) -> None:
-    try:
-        registry = er.async_get(hass)
-    except HomeAssistantError as exc:
-        _LOGGER.debug(
-            "Zone Mapper: entity registry not available to rename zone %s at '%s': %s",
-            zone_id,
-            location,
-            exc,
-        )
-        return
-
-    safe_location = _slugify_location(location)
-    sensor_uid = COORD_SENSOR_UNIQUE_ID_FMT.format(
-        location=safe_location, zone_id=zone_id
-    )
-    presence_uid = PRESENCE_SENSOR_UNIQUE_ID_FMT.format(
-        location=safe_location, zone_id=zone_id
-    )
+    registry = er.async_get(hass)
+    sensor_uid, presence_uid = _zone_entity_unique_ids(location, zone_id)
 
     sensor_eid = registry.async_get_entity_id("sensor", DOMAIN, sensor_uid)
     if sensor_eid:
-        base = f"Zone Mapper {location} Zone {zone_id}"
-        new_name = f"{base} - {zone_name}" if zone_name else base
-        registry.async_update_entity(sensor_eid, name=new_name)
+        base = f"Apollo mmWave {location} Zone {zone_id}"
+        registry.async_update_entity(
+            sensor_eid, name=f"{base} - {zone_name}" if zone_name else base
+        )
 
     presence_eid = registry.async_get_entity_id("binary_sensor", DOMAIN, presence_uid)
     if presence_eid:
         base = f"{location} Zone {zone_id} Presence"
-        new_name = f"{base} - {zone_name}" if zone_name else base
-        registry.async_update_entity(presence_eid, name=new_name)
-
-
-def _remove_zone(hass: HomeAssistant, location: str, zone_id: int) -> None:
-    store = _ensure_location_store(hass, location)
-    store[STORE_ZONES].pop(zone_id, None)
-    try:
-        registry = er.async_get(hass)
-    except HomeAssistantError as exc:
-        _LOGGER.debug(
-            "Zone Mapper: entity registry not available while deleting zone %s"
-            " at '%s': %s",
-            zone_id,
-            location,
-            exc,
+        registry.async_update_entity(
+            presence_eid, name=f"{base} - {zone_name}" if zone_name else base
         )
-        return
 
-    safe_location = _slugify_location(location)
-    sensor_uid = COORD_SENSOR_UNIQUE_ID_FMT.format(
-        location=safe_location, zone_id=zone_id
-    )
-    presence_uid = PRESENCE_SENSOR_UNIQUE_ID_FMT.format(
-        location=safe_location, zone_id=zone_id
-    )
+
+def _remove_zone_entities(hass: HomeAssistant, location: str, zone_id: int) -> None:
+    registry = er.async_get(hass)
+    sensor_uid, presence_uid = _zone_entity_unique_ids(location, zone_id)
 
     sensor_eid = registry.async_get_entity_id("sensor", DOMAIN, sensor_uid)
     if sensor_eid:
@@ -316,72 +251,22 @@ def _remove_zone(hass: HomeAssistant, location: str, zone_id: int) -> None:
         registry.async_remove(presence_eid)
 
 
-def _load_platforms_if_needed(
-    hass: HomeAssistant, location: str, config: ConfigType
-) -> None:
-    integration = _get_integration_data(hass)
-    loaded = integration[DATA_PLATFORMS_LOADED]
-    if location in loaded:
-        return
-
-    store = _ensure_location_store(hass, location)
-    discovery_info = {
-        "location": location,
-        "zones": dict(store[STORE_ZONES]),
-    }
-    hass.async_create_task(
-        async_load_platform(hass, "binary_sensor", DOMAIN, discovery_info, config)
-    )
-    hass.async_create_task(
-        async_load_platform(hass, "sensor", DOMAIN, discovery_info, config)
-    )
-    loaded.add(location)
-
-
-def _fire_update_event(hass: HomeAssistant, location: str) -> None:
+def _notify_zones_updated(hass: HomeAssistant, location: str) -> None:
+    """Persist and fan out a zone change (internal signal + public event)."""
+    get_store(hass).async_delay_save()
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, location)
     hass.bus.async_fire(EVENT_ZONE_UPDATED, {"location": location})
 
 
-def _build_bootstrap_callback(
-    hass: HomeAssistant, config: ConfigType
-) -> Callable[[Event | None], Coroutine[Any, Any, None]]:
-    async def _bootstrap_from_entity_registry(_event: Event | None = None) -> None:
-        try:
-            registry = er.async_get(hass)
-        except HomeAssistantError as exc:
-            _LOGGER.debug(
-                "Zone Mapper: entity registry not available at startup: %s", exc
-            )
-            return
-
-        locations: dict[str, set[int]] = {}
-        for entry in registry.entities.values():
-            if entry.platform != DOMAIN or entry.domain != "sensor":
-                continue
-            parsed = _parse_sensor_unique_id(entry.unique_id or "")
-            if not parsed:
-                continue
-            slug, zone_id = parsed
-            location_name = _derive_location_name(entry, slug)
-            locations.setdefault(location_name, set()).add(zone_id)
-
-        for location_name, zone_ids in locations.items():
-            store = _ensure_location_store(hass, location_name)
-            for zone_id in zone_ids:
-                store[STORE_ZONES].setdefault(zone_id, {})
-            _load_platforms_if_needed(hass, location_name, config)
-
-    return _bootstrap_from_entity_registry
-
-
 def _build_update_zone_handler(
-    hass: HomeAssistant, config: ConfigType
+    hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
     async def handle_update_zone(call: ServiceCall) -> None:
         location_raw = call.data.get("location")
         if not isinstance(location_raw, str) or not location_raw.strip():
             _LOGGER.debug(
-                "Zone Mapper: rejected update with invalid location: %s", location_raw
+                "Apollo mmWave: rejected update with invalid location: %s",
+                location_raw,
             )
             return
 
@@ -394,56 +279,57 @@ def _build_update_zone_handler(
         zone_name = _coerce_zone_name(call.data.get("name"))
         delete_zone = bool(call.data.get("delete"))
 
-        store = _ensure_location_store(hass, location)
+        store = get_store(hass)
+        loc = store.location(location)
 
         if rotation is not None:
-            store[ATTR_ROTATION_DEG] = rotation
+            loc[ATTR_ROTATION_DEG] = rotation
 
         if entities is not None:
-            store[STORE_ENTITIES] = entities
+            loc[STORE_ENTITIES] = entities
 
         if delete_zone and zone_id is not None:
-            _remove_zone(hass, location, zone_id)
-            _fire_update_event(hass, location)
+            loc[STORE_ZONES].pop(zone_id, None)
+            _remove_zone_entities(hass, location, zone_id)
+            _notify_zones_updated(hass, location)
             return
 
         if zone_id is None or shape is None:
+            # Rotation/entities-only update, or a rename without geometry.
             if zone_id is not None and zone_name is not None:
-                zone_entry = store[STORE_ZONES].get(zone_id)
-                if isinstance(zone_entry, dict):
+                zone_entry = store.zone(location, zone_id)
+                if zone_entry is not None:
                     zone_entry[ATTR_NAME] = zone_name
                     _update_registry_names(hass, location, zone_id, zone_name)
-            _fire_update_event(hass, location)
+            _notify_zones_updated(hass, location)
             return
 
         if shape not in SUPPORTED_SHAPES:
             _LOGGER.debug(
-                "Zone Mapper: unsupported shape '%s' for location '%s'",
+                "Apollo mmWave: unsupported shape '%s' for location '%s'",
                 shape,
                 location,
             )
             return
 
-        normalized_data = _normalize_zone_payload(shape, data, zone_id, location)
-        zone_entry: dict[str, Any] = {
+        zone_entry = {
             ATTR_SHAPE: shape,
-            ATTR_DATA: normalized_data,
+            ATTR_DATA: _normalize_zone_payload(shape, data, zone_id, location),
         }
 
         if zone_name is not None:
             zone_entry[ATTR_NAME] = zone_name
         else:
-            existing = store[STORE_ZONES].get(zone_id, {})
-            if isinstance(existing, dict) and isinstance(existing.get(ATTR_NAME), str):
+            existing = store.zone(location, zone_id)
+            if existing is not None and isinstance(existing.get(ATTR_NAME), str):
                 zone_entry[ATTR_NAME] = existing[ATTR_NAME]
 
-        store[STORE_ZONES][zone_id] = zone_entry
+        loc[STORE_ZONES][zone_id] = zone_entry
 
         if zone_name is not None:
             _update_registry_names(hass, location, zone_id, zone_name)
 
-        _load_platforms_if_needed(hass, location, config)
-        _fire_update_event(hass, location)
+        _notify_zones_updated(hass, location)
 
     return handle_update_zone
 
@@ -474,18 +360,8 @@ UPDATE_ZONE_SERVICE_SCHEMA = vol.Schema(
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register Zone Mapper services and bootstrap stored entities."""
-    _get_integration_data(hass)
-    hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STARTED, _build_bootstrap_callback(hass, config)
-    )
-    if not hass.services.has_service(DOMAIN, SERVICE_UPDATE_ZONE):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_UPDATE_ZONE,
-            _build_update_zone_handler(hass, config),
-            schema=UPDATE_ZONE_SERVICE_SCHEMA,
-        )
+    """Config-entry-only integration; nothing to do for YAML."""
+    _ = (hass, config)
     return True
 
 
@@ -519,31 +395,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
     Set up Apollo mmWave from a config entry.
 
-    Registers the update service, bootstraps any restored entities, serves the
-    bundled frontend, and registers the dedicated Apollo mmWave dashboard so new
-    users get the tuning + zone-mapping UI immediately with no extra installs.
+    Loads (or migrates) the zone store, registers the update service, forwards
+    the sensor/binary_sensor platforms, serves the bundled frontend, and
+    registers the dedicated Apollo mmWave dashboard.
 
     The frontend assets are registered unconditionally — the cards and strategy
     must work even when the auto-dashboard is turned off (users laying out the
     cards themselves). Only the sidebar dashboard is gated by the option.
     """
-    _get_integration_data(hass)
+    from .store import ZoneStore  # noqa: PLC0415
 
-    # Ensure service is registered only once across YAML and UI setups.
-    if not hass.services.has_service(DOMAIN, SERVICE_UPDATE_ZONE):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_UPDATE_ZONE,
-            _build_update_zone_handler(hass, {}),
-            schema=UPDATE_ZONE_SERVICE_SCHEMA,
-        )
+    store = ZoneStore(hass)
+    if not await store.async_load():
+        from .migration import async_migrate_legacy  # noqa: PLC0415
 
-    # Bootstrap entities either at startup or immediately if HA is already running.
-    bootstrap_cb = _build_bootstrap_callback(hass, {})
-    if getattr(hass, "is_running", False):
-        hass.async_create_task(bootstrap_cb(None))
-    else:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, bootstrap_cb)
+        await async_migrate_legacy(hass, store)
+    hass.data.setdefault(DOMAIN, {})[DATA_STORE] = store
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        _build_update_zone_handler(hass),
+        schema=UPDATE_ZONE_SERVICE_SCHEMA,
+    )
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # `frontend`, `http`, and `lovelace` are manifest dependencies, so they are
     # ready by now — register immediately. Waiting for EVENT_HOMEASSISTANT_STARTED
@@ -560,33 +436,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """
-    Unload a config entry for Apollo mmWave.
-
-    Removes the auto-registered dashboard/panel. Zone state lives in memory and
-    the service is shared with YAML setup, so both are left in place.
-    """
-    _ = entry
+    """Unload the entry: platforms, service, dashboard; flush the store."""
     from .frontend import async_remove_dashboard  # noqa: PLC0415
 
-    await async_remove_dashboard(hass)
-    return True
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE)
+        await async_remove_dashboard(hass)
+        store = hass.data.get(DOMAIN, {}).pop(DATA_STORE, None)
+        if store is not None:
+            await store.async_save()
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """
-    Remove a config entry.
-
-    Since this integration uses legacy platform loading which doesn't associate
-    entities with the config entry, we must manually clean them up from the registry.
-    """
+    """Delete the zone store when the integration is removed."""
     _ = entry
-    registry = er.async_get(hass)
-    entities_to_remove = [
-        entry.entity_id
-        for entry in registry.entities.values()
-        if entry.platform == DOMAIN
-    ]
+    from .store import ZoneStore  # noqa: PLC0415
 
-    for entity_id in entities_to_remove:
-        registry.async_remove(entity_id)
+    await ZoneStore(hass).async_remove()

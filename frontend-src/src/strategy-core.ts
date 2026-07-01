@@ -1,7 +1,11 @@
 import type { HomeAssistant } from "./types";
-import { baseNameFromDevice } from "./entities";
-import { detectProfile, type RadarProfile } from "./profiles";
-import { hasLd2450, zoneMapperCard } from "./ld2450";
+import {
+  baseNameFromDevice,
+  detectProfileFromEntities,
+  entityMapFromDevice,
+} from "./entities";
+import { apolloModelInfo, type RadarProfile } from "./profiles";
+import { hasLd2450, hasLd2450Device, zoneMapperCard } from "./ld2450";
 import {
   controlRows,
   zoneConfigRows,
@@ -30,21 +34,40 @@ export interface StrategyConfig {
   distance_unit?: string;
 }
 
+function deviceHasEntities(hass: HomeAssistant, deviceId: string): boolean {
+  return Object.values(hass.entities).some((e) => e.device_id === deviceId);
+}
+
 function deviceFromId(
   hass: HomeAssistant,
   deviceId: string
 ): RadarDevice | undefined {
+  const d = hass.devices[deviceId];
+  // Registry-first: manufacturer/model survive entity renames and `_2` dedup.
+  const reg = apolloModelInfo(d);
+  // A registry match with zero registered entities is a freshly added device
+  // mid-race (registry event lands before its entities) — skip it so the
+  // later entities update still counts as a device-set change and regenerates.
+  if (reg && !deviceHasEntities(hass, deviceId)) return undefined;
   const base = baseNameFromDevice(hass, deviceId);
-  if (!base) return undefined;
-  const profile = detectProfile(hass, base);
-  const ld2450 = hasLd2450(hass, base);
+  if (!reg && !base) return undefined;
+
+  // Entities win over the registry model when they give a concrete chip match
+  // (DIY/reflashed hardware); the registry decides when probing is blind
+  // (e.g. every chip-specific entity disabled or renamed beyond recognition).
+  const profile = detectProfileFromEntities(hass, deviceId) ?? reg?.profile;
+  const ld2450 =
+    hasLd2450Device(hass, deviceId) ||
+    (base ? hasLd2450(hass, base) : false) ||
+    (reg?.ld2450 ?? false);
   // Include the device if it has either a tunable gate radar or an LD2450.
   if (!profile && !ld2450) return undefined;
-  const d = hass.devices[deviceId];
   return {
     deviceId,
-    base,
-    name: d?.name_by_user || d?.name || base,
+    // The base doubles as the view path, so a registry-matched device whose
+    // entity names yield no base still needs a stable unique key.
+    base: base ?? deviceId,
+    name: d?.name_by_user || d?.name || base || deviceId,
     profile,
     ld2450,
   };
@@ -131,7 +154,9 @@ function cardMap(
   // tunable gate radar.
   if (dev.profile) {
     const profile = dev.profile;
-    const m = profile.entityMap(dev.base);
+    // Prefer the device's actual entity ids (rename/dedup-proof); constructed
+    // ids are only right when nothing was renamed.
+    const m = entityMapFromDevice(hass, dev.deviceId) ?? profile.entityMap(dev.base);
     const label = profile.label;
     const historyRows = historyEntities(m).filter((r) => r.entity in hass.states);
     const range = entitiesCard(
@@ -156,14 +181,18 @@ function cardMap(
       `${label} Zone Config`,
       presentRows(hass, zoneConfigRows(m))
     );
+    // device_id is the durable reference; device_base_name is kept so configs
+    // still resolve on older card bundles (and as the in-card fallback).
     cards.distance = {
       type: "custom:apollo-radar-distance-card",
+      device_id: dev.deviceId,
       device_base_name: dev.base,
       title: `${label} Distances`,
       ...(distanceUnit ? { distance_unit: distanceUnit } : {}),
     };
     cards.gateEnergy = {
       type: "custom:apollo-radar-gate-energy-card",
+      device_id: dev.deviceId,
       device_base_name: dev.base,
       title: `${label} Gate Energy`,
     };

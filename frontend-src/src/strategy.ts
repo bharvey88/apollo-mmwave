@@ -1,9 +1,38 @@
 import type { HomeAssistant } from "./types";
 import {
+  detectRadarDevices,
   generateSections,
   generateViews,
   type StrategyConfig,
 } from "./strategy-core";
+
+/** Stable key for the set of Apollo mmWave devices currently present. */
+function radarDeviceKey(hass: HomeAssistant): string {
+  return detectRadarDevices(hass)
+    .map((d) => d.deviceId)
+    .sort()
+    .join(",");
+}
+
+/**
+ * Only rebuild the dashboard when the *set of devices* changes.
+ *
+ * HA regenerates a strategy dashboard whenever `hass.entities`/`devices`/`areas`
+ * changes. Drawing a zone creates new `apollo_mmwave` zone sensors, which mutates
+ * `hass.entities` — regenerating mid-draw would tear down the zone-mapper card
+ * ("Subscription not found") and wipe the in-progress zone. Gating on the actual
+ * device set keeps "add a device → a tab appears" while ignoring entity churn.
+ */
+export function shouldRegenerate(
+  _config: StrategyConfig,
+  oldHass: HomeAssistant,
+  newHass: HomeAssistant
+): boolean {
+  // Fast path: the device registry object only changes when devices do, so
+  // routine entity/state churn (zone sensors, moving targets) short-circuits.
+  if (oldHass.devices === newHass.devices) return false;
+  return radarDeviceKey(oldHass) !== radarDeviceKey(newHass);
+}
 
 const EMPTY_VIEW = {
   title: "Apollo Radar Tuning",
@@ -24,6 +53,8 @@ const EMPTY_VIEW = {
  *     type: custom:apollo-radar-tuning
  */
 class ApolloLd2410ViewStrategy extends HTMLElement {
+  static shouldRegenerate = shouldRegenerate;
+
   static async generate(
     config: StrategyConfig,
     hass: HomeAssistant
@@ -39,6 +70,8 @@ class ApolloLd2410ViewStrategy extends HTMLElement {
  *     type: custom:apollo-radar-tuning
  */
 class ApolloLd2410DashboardStrategy extends HTMLElement {
+  static shouldRegenerate = shouldRegenerate;
+
   static async generate(
     config: StrategyConfig,
     hass: HomeAssistant

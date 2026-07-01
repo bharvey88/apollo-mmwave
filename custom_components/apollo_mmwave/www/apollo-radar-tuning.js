@@ -1465,6 +1465,13 @@ function generateSections(hass, config) {
     (d2) => buildDeviceSections(hass, d2, config.distance_unit)
   );
 }
+function radarDeviceKey(hass) {
+  return detectRadarDevices(hass).map((d2) => d2.deviceId).sort().join(",");
+}
+function shouldRegenerate(_config, oldHass, newHass) {
+  if (oldHass.devices === newHass.devices) return false;
+  return radarDeviceKey(oldHass) !== radarDeviceKey(newHass);
+}
 const EMPTY_VIEW = {
   title: "Apollo Radar Tuning",
   cards: [
@@ -1474,12 +1481,14 @@ const EMPTY_VIEW = {
     }
   ]
 };
-class ApolloLd2410ViewStrategy extends HTMLElement {
+const _ApolloLd2410ViewStrategy = class _ApolloLd2410ViewStrategy extends HTMLElement {
   static async generate(config, hass) {
     return { type: "sections", sections: generateSections(hass, config) };
   }
-}
-class ApolloLd2410DashboardStrategy extends HTMLElement {
+};
+_ApolloLd2410ViewStrategy.shouldRegenerate = shouldRegenerate;
+let ApolloLd2410ViewStrategy = _ApolloLd2410ViewStrategy;
+const _ApolloLd2410DashboardStrategy = class _ApolloLd2410DashboardStrategy extends HTMLElement {
   static async generate(config, hass) {
     const views = generateViews(hass, config);
     return {
@@ -1487,7 +1496,9 @@ class ApolloLd2410DashboardStrategy extends HTMLElement {
       views: views.length ? views : [EMPTY_VIEW]
     };
   }
-}
+};
+_ApolloLd2410DashboardStrategy.shouldRegenerate = shouldRegenerate;
+let ApolloLd2410DashboardStrategy = _ApolloLd2410DashboardStrategy;
 if (!customElements.get("ll-strategy-view-apollo-radar-tuning")) {
   customElements.define(
     "ll-strategy-view-apollo-radar-tuning",

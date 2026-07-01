@@ -6,12 +6,14 @@ DOMAIN = "apollo_mmwave"
 # Services
 SERVICE_UPDATE_ZONE = "update_zone"
 
-# Event names
+# Event names (public bus event, part of the integration's API surface)
 EVENT_ZONE_UPDATED = f"{DOMAIN}_zone_updated"
 
+# Internal dispatcher signal fired with the location name on any zone change.
+SIGNAL_ZONES_UPDATED = f"{DOMAIN}_zones_updated"
+
 # hass.data keys
-DATA_LOCATIONS = "locations"
-DATA_PLATFORMS_LOADED = "platforms_loaded"
+DATA_STORE = "store"
 DATA_ASSETS_REGISTERED = "assets_registered"
 
 # Location store keys

@@ -7,7 +7,17 @@ export interface HassEntity {
 export interface HomeAssistant {
   states: Record<string, HassEntity>;
   entities: Record<string, { device_id?: string }>;
-  devices: Record<string, { name?: string; name_by_user?: string }>;
+  devices: Record<
+    string,
+    {
+      name?: string;
+      name_by_user?: string;
+      /** ESPHome fills these from the firmware project name
+       *  (e.g. "ApolloAutomation.MSR-2") — used for registry-first detection. */
+      manufacturer?: string;
+      model?: string;
+    }
+  >;
   /** Server config; `unit_system.length` is "km" (metric) or "mi" (US). */
   config?: { unit_system?: { length?: string } };
 }

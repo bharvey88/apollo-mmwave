@@ -1,0 +1,3 @@
+# pytest-homeassistant-custom-component pins its matching homeassistant
+# version (0.13.281 == HA 2025.9.4 — keep in lockstep with requirements.txt).
+pytest-homeassistant-custom-component==0.13.281

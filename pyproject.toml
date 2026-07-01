@@ -1,7 +1,11 @@
 [project]
-name = "zone_mapper"
+name = "apollo_mmwave"
 version = "0.1.0"
 requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 # Based on https://github.com/home-assistant/core/blob/dev/pyproject.toml
@@ -15,6 +19,16 @@ ignore = [
     "D212",    # multi-line-summary-first-line (incompatible with formatter)
     "COM812",  # incompatible with formatter
     "ISC001",  # incompatible with formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Same exemptions Home Assistant core grants its test suite.
+"tests/**" = [
+    "S101",    # asserts are the point of tests
+    "ANN001",  # fixtures are untyped by convention
+    "ANN201",
+    "ARG001",  # autouse fixture arguments
+    "PLR2004", # literal values in assertions are fine
 ]
 
 [tool.ruff.lint.flake8-pytest-style]

@@ -84,6 +84,17 @@ npm test         # vitest
 npm run build    # → ../custom_components/apollo_mmwave/www/apollo-radar-tuning.js
 ```
 
+The Python backend has a pytest suite (`pytest-homeassistant-custom-component`):
+
+```bash
+uv venv && uv pip install -r requirements-test.txt
+uv run --no-project pytest tests/
+```
+
+Zone data is persisted in `.storage/apollo_mmwave.zones`; installs upgrading
+from ≤1.1.x are migrated automatically (including a one-time entity_id rename
+to the `sensor.apollo_mmwave_*` pattern the zone-mapper card expects).
+
 See `frontend-src/vendor/zone-mapper-card.md` for how the zone-mapping card is
 vendored and the two patches to re-apply when updating it.
 

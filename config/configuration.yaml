@@ -5,8 +5,6 @@ default_config:
 homeassistant:
   debug: true
 
-apollo_mmwave:
-
 # https://www.home-assistant.io/integrations/logger/
 logger:
   default: info

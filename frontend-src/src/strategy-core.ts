@@ -298,3 +298,14 @@ export function generateSections(
     buildDeviceSections(hass, d, config.distance_unit)
   );
 }
+
+/** Flat card list across the targeted devices — used by the section strategy,
+ *  which must return exactly one grid section. */
+export function generateCards(
+  hass: HomeAssistant,
+  config: StrategyConfig
+): Record<string, any>[] {
+  return targetDevices(hass, config).flatMap((d) =>
+    buildDeviceCards(hass, d, config.distance_unit)
+  );
+}

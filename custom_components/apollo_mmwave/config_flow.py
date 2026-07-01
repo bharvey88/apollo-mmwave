@@ -32,16 +32,31 @@ class ApolloMmwaveConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Show a confirmation form and create the entry when submitted."""
+        """Ask about the auto-dashboard and create the entry when submitted."""
         if self._async_current_entries():
             return self.async_abort(reason="already_configured")
 
         if user_input is not None:
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(title="Apollo mmWave", data={})
+            return self.async_create_entry(
+                title="Apollo mmWave",
+                data={},
+                options={
+                    CONF_AUTO_CREATE_VIEW: user_input.get(
+                        CONF_AUTO_CREATE_VIEW, DEFAULT_AUTO_CREATE_VIEW
+                    ),
+                },
+            )
 
-        return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_AUTO_CREATE_VIEW, default=DEFAULT_AUTO_CREATE_VIEW
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="user", data_schema=schema)
 
     @staticmethod
     @callback

@@ -12,6 +12,7 @@ EVENT_ZONE_UPDATED = f"{DOMAIN}_zone_updated"
 # hass.data keys
 DATA_LOCATIONS = "locations"
 DATA_PLATFORMS_LOADED = "platforms_loaded"
+DATA_ASSETS_REGISTERED = "assets_registered"
 
 # Location store keys
 STORE_ZONES = "zones"

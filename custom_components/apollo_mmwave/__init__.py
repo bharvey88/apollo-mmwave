@@ -1,4 +1,4 @@
-"""Zone Mapper Integration."""
+"""Apollo mmWave: zone-mapping backend + bundled radar-tuning dashboard."""
 
 from __future__ import annotations
 
@@ -105,14 +105,9 @@ def _derive_location_name(entry: er.RegistryEntry, fallback_slug: str) -> str:
             continue
         if not candidate.startswith("Zone Mapper ") or " Zone " not in candidate:
             continue
-        try:
-            tail_idx = candidate.rfind(" Zone ")
-            location = candidate[len("Zone Mapper ") : tail_idx]
-            if location:
-                return location
-        except Exception:
-            _LOGGER.exception("Failed to restore zone data for location '%s'", location)
-            continue
+        location = candidate[len("Zone Mapper ") : candidate.rfind(" Zone ")]
+        if location:
+            return location
     return fallback_slug
 
 
@@ -499,35 +494,25 @@ def _auto_create_dashboard_enabled(entry: ConfigEntry) -> bool:
     return bool(value)
 
 
-async def _schedule_dashboard_registration(
+async def _async_apply_dashboard_option(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """
-    Register the dedicated Apollo mmWave dashboard once Lovelace is ready.
+    """Register or remove the sidebar dashboard to match the current option."""
+    # Lazy import: keeps Lovelace internals out of the config-flow import path.
+    from .frontend import (  # noqa: PLC0415
+        async_register_dashboard,
+        async_remove_dashboard,
+    )
 
-    Unlike the old seed-into-default approach this is idempotent: the dashboard
-    is (re)registered on every startup, so there is no one-time flag to track.
-    Registration is gated only by the opt-out option.
-    """
-    if not _auto_create_dashboard_enabled(entry):
-        return
-
-    async def _run(_event: Event | None = None) -> None:
-        if not _auto_create_dashboard_enabled(entry):
-            return
-        # Lazy import: keeps Lovelace internals out of the config-flow import path.
-        from .frontend import (  # noqa: PLC0415
-            async_register_dashboard,
-            async_register_frontend_assets,
-        )
-
-        await async_register_frontend_assets(hass)
+    if _auto_create_dashboard_enabled(entry):
         await async_register_dashboard(hass)
-
-    if getattr(hass, "is_running", False):
-        hass.async_create_task(_run(None))
     else:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _run)
+        await async_remove_dashboard(hass)
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply option changes immediately (no restart needed)."""
+    await _async_apply_dashboard_option(hass, entry)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -537,6 +522,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Registers the update service, bootstraps any restored entities, serves the
     bundled frontend, and registers the dedicated Apollo mmWave dashboard so new
     users get the tuning + zone-mapping UI immediately with no extra installs.
+
+    The frontend assets are registered unconditionally — the cards and strategy
+    must work even when the auto-dashboard is turned off (users laying out the
+    cards themselves). Only the sidebar dashboard is gated by the option.
     """
     _get_integration_data(hass)
 
@@ -556,19 +545,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, bootstrap_cb)
 
-    await _schedule_dashboard_registration(hass, entry)
+    # `frontend`, `http`, and `lovelace` are manifest dependencies, so they are
+    # ready by now — register immediately. Waiting for EVENT_HOMEASSISTANT_STARTED
+    # (the old behavior) left a window where a page load during startup missed
+    # the extra JS module and the dashboard timed out waiting for the strategy.
+    from .frontend import async_register_frontend_assets  # noqa: PLC0415
+
+    await async_register_frontend_assets(hass)
+    await _async_apply_dashboard_option(hass, entry)
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
-    Unload a config entry for Zone Mapper.
+    Unload a config entry for Apollo mmWave.
 
-    The integration stores state in memory and uses a shared service; nothing to
-    unload per-entry at this time.
+    Removes the auto-registered dashboard/panel. Zone state lives in memory and
+    the service is shared with YAML setup, so both are left in place.
     """
-    _ = (hass, entry)
+    _ = entry
+    from .frontend import async_remove_dashboard  # noqa: PLC0415
+
+    await async_remove_dashboard(hass)
     return True
 
 

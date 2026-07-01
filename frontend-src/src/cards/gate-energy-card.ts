@@ -51,10 +51,13 @@ if (!customElements.get("apollo-radar-gate-energy-card")) {
   customElements.define("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
 }
 
-(window as any).customCards = (window as any).customCards || [];
-(window as any).customCards.push({
-  type: "apollo-radar-gate-energy-card",
-  name: "Apollo Radar Gate Energy Chart",
-  description: "Per-gate move/still energy chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
-  documentationURL: "https://github.com/ApolloAutomation/dashboard-cards",
-});
+const customCards = ((window as any).customCards =
+  (window as any).customCards || []);
+if (!customCards.some((c: { type?: string }) => c.type === "apollo-radar-gate-energy-card")) {
+  customCards.push({
+    type: "apollo-radar-gate-energy-card",
+    name: "Apollo Radar Gate Energy Chart",
+    description: "Per-gate move/still energy chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
+    documentationURL: "https://github.com/bharvey88/apollo-mmwave",
+  });
+}

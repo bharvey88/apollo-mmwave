@@ -35,8 +35,13 @@ export function hasLd2450(hass: HomeAssistant, base: string): boolean {
  *
  * The card persists its tracked X/Y entity pairs in the integration backend
  * (picked once via the card's own device/entity pickers), so the config only
- * needs the `location` key plus sensible display defaults. `location` is keyed
- * to the device's base name so each device gets its own independent zone set.
+ * needs the `location` key plus sensible display defaults.
+ *
+ * `location` is the device's *display name* (base name only as a fallback): the
+ * card shows it as a label and the backend builds zone entity names from it.
+ * Known limitation: renaming the device changes the key, orphaning previously
+ * drawn zones — fixing that properly means keying zones by device id in the
+ * backend store (planned rework), not a frontend-only change.
  */
 export function zoneMapperCard(
   base: string,

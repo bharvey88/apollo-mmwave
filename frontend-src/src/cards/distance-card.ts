@@ -3,7 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { HomeAssistant, Ld2410CardConfig } from "../types";
 import { resolveEntities, resolveProfile } from "../entities";
 import { renderDistanceChart } from "../charts/distance-chart";
-import type { Uom } from "../charts/unit-convert";
+import { defaultDistanceUnit, isValidUom, type Uom } from "../charts/unit-convert";
 
 export class ApolloLd2410DistanceCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
@@ -25,7 +25,9 @@ export class ApolloLd2410DistanceCard extends LitElement {
     if (!this.hass || !this._config) return nothing;
     const m = resolveEntities(this.hass, this._config);
     const profile = resolveProfile(this.hass, this._config);
-    const unit = (this._config.distance_unit ?? "in") as Uom;
+    const unit: Uom = isValidUom(this._config.distance_unit)
+      ? this._config.distance_unit
+      : defaultDistanceUnit(this.hass);
     const chart = renderDistanceChart(this.hass, m, unit, profile?.maxBarLabels);
     if (chart === nothing) return nothing;
     return html`
@@ -46,10 +48,13 @@ if (!customElements.get("apollo-radar-distance-card")) {
   customElements.define("apollo-radar-distance-card", ApolloLd2410DistanceCard);
 }
 
-(window as any).customCards = (window as any).customCards || [];
-(window as any).customCards.push({
-  type: "apollo-radar-distance-card",
-  name: "Apollo Radar Distance Chart",
-  description: "Distance / zone chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
-  documentationURL: "https://github.com/ApolloAutomation/dashboard-cards",
-});
+const customCards = ((window as any).customCards =
+  (window as any).customCards || []);
+if (!customCards.some((c: { type?: string }) => c.type === "apollo-radar-distance-card")) {
+  customCards.push({
+    type: "apollo-radar-distance-card",
+    name: "Apollo Radar Distance Chart",
+    description: "Distance / zone chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
+    documentationURL: "https://github.com/bharvey88/apollo-mmwave",
+  });
+}

@@ -5,9 +5,14 @@ This integration ships its own Lovelace frontend so users install ONE thing:
 
 1. ``async_register_frontend_assets`` serves the bundled JS (the radar-tuning
    cards + dashboard strategy, and the vendored zone-mapper-card) from
-   ``custom_components/apollo_mmwave/www`` and registers them as extra JS URLs,
-   so the cards/strategy are available everywhere without a separate HACS card
-   install.
+   ``custom_components/apollo_mmwave/www`` and registers each bundle twice:
+
+   - as a Lovelace *resource* (storage mode), so browser tabs that were open
+     before the integration loaded pick the modules up on the next dashboard
+     navigation — no page reload needed; and
+   - as an extra JS URL, which covers YAML-mode Lovelace where the resource
+     collection is read-only. Both point at the same versioned URL, so the
+     browser's module cache loads the code exactly once.
 
 2. ``async_register_dashboard`` registers a dedicated, strategy-backed
    "Apollo mmWave" dashboard in the sidebar. The dashboard config is simply
@@ -44,6 +49,7 @@ from .const import (
     DASHBOARD_STRATEGY_TYPE,
     DASHBOARD_TITLE,
     DASHBOARD_URL_PATH,
+    DATA_ASSETS_REGISTERED,
     DOMAIN,
     FRONTEND_DIR,
     JS_BUNDLES,
@@ -63,6 +69,9 @@ def _frontend_path() -> Path:
 
 async def async_register_frontend_assets(hass: HomeAssistant) -> None:
     """Serve and register the bundled JS so the cards/strategy load globally."""
+    if hass.data.setdefault(DOMAIN, {}).get(DATA_ASSETS_REGISTERED):
+        return
+
     base = _frontend_path()
     try:
         version = (await async_get_integration(hass, DOMAIN)).version or "0"
@@ -89,6 +98,52 @@ async def async_register_frontend_assets(hass: HomeAssistant) -> None:
         await hass.http.async_register_static_paths(static_paths)
     for url in js_urls:
         frontend.add_extra_js_url(hass, url)
+    await _async_register_lovelace_resources(hass, js_urls)
+    hass.data[DOMAIN][DATA_ASSETS_REGISTERED] = True
+
+
+async def _async_register_lovelace_resources(
+    hass: HomeAssistant, js_urls: list[str]
+) -> None:
+    """
+    Register the bundled JS in the Lovelace resource collection (storage mode).
+
+    ``add_extra_js_url`` only reaches pages loaded *after* registration — a tab
+    that was open before install never gets the module and the dashboard times
+    out waiting for the strategy element. Resources are fetched over websocket
+    whenever a Lovelace panel initializes, so they reach existing tabs too.
+
+    The resource collection is not a public contract (same as the dashboards
+    dict), so failures are logged and swallowed; extra JS remains the fallback.
+    """
+    try:
+        lovelace_data = hass.data.get(LOVELACE_DATA)
+        resources = getattr(lovelace_data, "resources", None)
+        if resources is None or not hasattr(resources, "async_create_item"):
+            # YAML-mode resource list (read-only) or Lovelace not ready.
+            return
+        if not getattr(resources, "loaded", True):
+            await resources.async_load()
+            resources.loaded = True
+
+        existing: dict[str, dict[str, Any]] = {}
+        for item in resources.async_items():
+            url = str(item.get("url", ""))
+            existing[url.partition("?")[0]] = item
+
+        for url in js_urls:
+            item = existing.get(url.partition("?")[0])
+            if item is None:
+                await resources.async_create_item({"res_type": "module", "url": url})
+            elif item.get("url") != url:
+                # Same bundle, older ?v= cache-buster: point it at this version.
+                await resources.async_update_item(item["id"], {"url": url})
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "Apollo mmWave: could not register Lovelace resources; relying on"
+            " extra JS only.",
+            exc_info=True,
+        )
 
 
 class StrategyDashboardConfig(LovelaceConfig):
@@ -183,3 +238,29 @@ async def async_register_dashboard(hass: HomeAssistant) -> bool:
             DASHBOARD_TITLE,
         )
         return True
+
+
+async def async_remove_dashboard(hass: HomeAssistant) -> None:
+    """
+    Remove the auto-registered dashboard and its sidebar panel.
+
+    Called when the user turns the dashboard option off or unloads the entry.
+    Only removes the dashboard if it is ours (a ``StrategyDashboardConfig``) so
+    a user-created dashboard on the same url path is left alone.
+    """
+    try:
+        lovelace_data = hass.data.get(LOVELACE_DATA)
+        dashboards = getattr(lovelace_data, "dashboards", None)
+        if isinstance(dashboards, dict) and isinstance(
+            dashboards.get(DASHBOARD_URL_PATH), StrategyDashboardConfig
+        ):
+            dashboards.pop(DASHBOARD_URL_PATH, None)
+            if frontend.async_panel_exists(hass, DASHBOARD_URL_PATH):
+                frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
+            _LOGGER.info("Apollo mmWave: removed the '%s' dashboard.", DASHBOARD_TITLE)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Apollo mmWave: could not remove the dashboard; it may remain in"
+            " the sidebar until Home Assistant restarts.",
+            exc_info=True,
+        )

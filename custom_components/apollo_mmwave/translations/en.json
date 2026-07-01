@@ -2,7 +2,13 @@
     "config": {
         "step": {
             "user": {
-                "description": "Set up Apollo mmWave. On first setup an 'Apollo mmWave' dashboard is added to your sidebar with a tuning + zone-mapping tab for each detected Apollo mmWave device. Tip: reload your browser once after setup (Ctrl/Cmd+Shift+R) so the dashboard's cards finish loading. You can turn the dashboard off in the integration options, or hide it from your profile later."
+                "description": "Set up Apollo mmWave. The integration serves its own cards and dashboard strategy — no separate downloads.",
+                "data": {
+                    "auto_create_view": "Add an 'Apollo mmWave' dashboard to the sidebar"
+                },
+                "data_description": {
+                    "auto_create_view": "Adds a dashboard with a tuning + zone-mapping tab for each detected Apollo mmWave device. Turn this off if you prefer to place the cards on your own dashboards; you can change it later in the integration options."
+                }
             }
         },
         "abort": {
@@ -18,7 +24,7 @@
                     "auto_create_view": "Auto-create the Apollo mmWave dashboard"
                 },
                 "data_description": {
-                    "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually."
+                    "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Takes effect immediately. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually."
                 }
             }
         }

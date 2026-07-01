@@ -35,12 +35,38 @@ so adding or removing a sensor just adds or removes a tab — nothing to maintai
 1. HACS → ⋮ → **Custom repositories** → add this repo as type **Integration**.
 2. Install **Apollo mmWave**, then restart Home Assistant.
 3. **Settings → Devices & Services → Add Integration → Apollo mmWave.**
-4. **Reload your browser once** (Ctrl/Cmd+Shift+R) so the dashboard's cards load.
-5. Open the new **Apollo mmWave** dashboard in your sidebar.
+   Setup asks whether to add the sidebar dashboard (on by default).
+4. Open the new **Apollo mmWave** dashboard in your sidebar.
 
-Prefer to lay things out yourself? Turn off the dashboard in the integration's
-options, or just hide it from your profile — the cards and strategy are still
-available to add manually.
+The integration registers its JS as a Lovelace resource, so the cards work in
+already-open tabs — no browser reload needed.
+
+## Use your own dashboards instead
+
+Prefer to lay things out yourself? Turn off the dashboard during setup (or any
+time in the integration's options — it takes effect immediately). The cards and
+strategies stay available:
+
+- **View strategy** — add a view (tab) to any dashboard that self-builds the
+  full per-device layout:
+
+  ```yaml
+  strategy:
+    type: custom:apollo-radar-tuning
+  ```
+
+- **Section strategy** — drop the mmWave cards into an existing *sections*
+  dashboard as one section (optionally limited to a single device):
+
+  ```yaml
+  strategy:
+    type: custom:apollo-radar-tuning
+    device_id: your_device_id   # optional; omit for all devices
+  ```
+
+- **Cards** — `custom:apollo-radar-distance-card`,
+  `custom:apollo-radar-gate-energy-card`, and `custom:zone-mapper-card` can be
+  placed individually (they're in the card picker).
 
 > **Already using the standalone Zone Mapper card?** You can remove it — this
 > integration bundles its own copy. (If you leave it installed, nothing breaks;

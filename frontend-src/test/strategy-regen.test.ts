@@ -48,4 +48,36 @@ describe("shouldRegenerate", () => {
     const newHass = hassWith(baseStates, baseEntities, { ...devices });
     expect(shouldRegenerate({}, oldHass, newHass)).toBe(false);
   });
+
+  it("regenerates when a device added earlier becomes detectable via a later entities update", () => {
+    // Race on device add: the device-registry event arrives before the
+    // device's entities register. At that point detection fails, so no regen.
+    const b2 = "apollo_r_pro_1_abcd";
+    const eng2 = `switch.${b2}_ld2412_engineering_mode`;
+    const devicesWithNew = { ...devices, dev2: { name: "Office R-PRO-1" } };
+    const bareHass = hassWith(baseStates, baseEntities, devicesWithNew);
+    expect(shouldRegenerate({}, oldHass, bareHass)).toBe(false);
+
+    // The entities then register: `devices` is reference-equal, only
+    // `entities`/`states` changed. This MUST regenerate (previously the
+    // devices-only fast path returned false forever -> tab never appeared).
+    const readyHass = hassWith(
+      { ...baseStates, [eng2]: { entity_id: eng2, state: "off", attributes: {} } },
+      { ...baseEntities, [eng2]: { device_id: "dev2" } },
+      devicesWithNew
+    );
+    expect(shouldRegenerate({}, bareHass, readyHass)).toBe(true);
+  });
+
+  it("does NOT regenerate on entity churn while a zone is being drawn", () => {
+    // Zone sensors belong to no radar device, so the detected key is stable
+    // even though `hass.entities` changed and the key is recomputed.
+    const zone = `sensor.zone_mapper_living_room_zone_1`;
+    const newHass = hassWith(
+      { ...baseStates, [zone]: { entity_id: zone, state: "1", attributes: {} } },
+      { ...baseEntities, [zone]: {} },
+      devices
+    );
+    expect(shouldRegenerate({}, oldHass, newHass)).toBe(false);
+  });
 });

@@ -197,7 +197,11 @@ export function renderDistanceChart(
   const plotBottom = TOP + rows.length * ROW_H;
   const height = plotBottom + AXIS_H;
 
-  // Gate-boundary gridlines + rotated distance axis labels.
+  // Gate-boundary gridlines + rotated distance axis labels. Whole numbers for
+  // coarse units (in/cm/mm), up to 2 decimals otherwise — `toFixed(0)` in
+  // meters rendered 0.75 m gates as duplicate ticks ("1, 2, 2, 3, 4, 5, 5…").
+  const tickFmt = (v: number) =>
+    model.gateSizeChart >= 10 ? v.toFixed(0) : String(Number(v.toFixed(2)));
   const axis: TemplateResult[] = [];
   for (let i = 0; i <= model.gateCount; i++) {
     const gx = x(model.gateSizeChart * i);
@@ -206,7 +210,7 @@ export function renderDistanceChart(
       <line x1=${gx} y1=${TOP} x2=${gx} y2=${plotBottom}
         stroke="var(--divider-color, #555)" stroke-width="1" opacity="0.3"></line>
       <text x=${gx} y=${plotBottom + 13} font-size="11" text-anchor="end"
-        transform="rotate(-45 ${gx} ${plotBottom + 13})" fill=${TXT2}>${val.toFixed(0)} ${unit}</text>`);
+        transform="rotate(-45 ${gx} ${plotBottom + 13})" fill=${TXT2}>${tickFmt(val)} ${unit}</text>`);
   }
 
   const rowEls = rows.map((r, i) => {

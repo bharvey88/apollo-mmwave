@@ -3,6 +3,7 @@ import {
   detectRadarDevices,
   buildDeviceCards,
   deviceView,
+  generateCards,
   generateViews,
   type RadarDevice,
 } from "../src/strategy-core";
@@ -132,6 +133,23 @@ describe("deviceView / generateViews", () => {
 
   it("produces one view (tab) per detected device", () => {
     expect(generateViews(deviceHass(), {})).toHaveLength(1);
+  });
+});
+
+describe("generateCards (section strategy)", () => {
+  it("returns a flat card list for all detected devices", () => {
+    const cards = generateCards(deviceHass(), {});
+    expect(cards.length).toBeGreaterThan(1);
+    // Flat list of cards, not sections.
+    for (const card of cards) expect(card.type).toBeDefined();
+    expect(cards.some((c) => c.type === "grid")).toBe(false);
+  });
+
+  it("limits to one device when device_id is set", () => {
+    expect(generateCards(deviceHass(), { device_id: "nope" })).toHaveLength(0);
+    expect(
+      generateCards(deviceHass(), { device_id: "dev1" }).length
+    ).toBeGreaterThan(1);
   });
 });
 

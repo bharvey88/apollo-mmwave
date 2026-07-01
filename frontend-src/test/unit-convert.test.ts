@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { convert, isValidUom, toMeters, VALID_UOMS } from "../src/charts/unit-convert";
+import {
+  convert,
+  defaultDistanceUnit,
+  isValidUom,
+  toMeters,
+  VALID_UOMS,
+} from "../src/charts/unit-convert";
 
 describe("unit-convert", () => {
   it("lists the six supported units", () => {
@@ -26,5 +32,17 @@ describe("unit-convert", () => {
     expect(convert(1, "m", "in")).toBeCloseTo(39.3701, 3);
     expect(convert(12, "in", "ft")).toBeCloseTo(1, 6);
     expect(convert(2.54, "cm", "in")).toBeCloseTo(1, 6);
+  });
+
+  it("defaults the chart unit from HA's unit system", () => {
+    expect(
+      defaultDistanceUnit({ config: { unit_system: { length: "mi" } } })
+    ).toBe("in");
+    expect(
+      defaultDistanceUnit({ config: { unit_system: { length: "km" } } })
+    ).toBe("m");
+    // Metric when the unit system is unknown (test hass objects, old HA).
+    expect(defaultDistanceUnit(undefined)).toBe("m");
+    expect(defaultDistanceUnit({})).toBe("m");
   });
 });

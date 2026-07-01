@@ -786,6 +786,10 @@ const METERS_PER = {
 function isValidUom(u2) {
   return !!u2 && VALID_UOMS.includes(u2);
 }
+function defaultDistanceUnit(hass) {
+  var _a2, _b;
+  return ((_b = (_a2 = hass == null ? void 0 : hass.config) == null ? void 0 : _a2.unit_system) == null ? void 0 : _b.length) === "mi" ? "in" : "m";
+}
 function toMeters(value, uom) {
   return value * METERS_PER[uom];
 }
@@ -933,6 +937,7 @@ function renderDistanceChart(hass, m2, unit, maxLabels = ["Max Move", "Max Still
     rows.push({ kind: "max", label: maxLabels[1], value: model.maxStill, gate: model.maxStillGate, color: STILL_COLOR$1 });
   const plotBottom = TOP + rows.length * ROW_H;
   const height = plotBottom + AXIS_H;
+  const tickFmt = (v2) => model.gateSizeChart >= 10 ? v2.toFixed(0) : String(Number(v2.toFixed(2)));
   const axis = [];
   for (let i2 = 0; i2 <= model.gateCount; i2++) {
     const gx = x2(model.gateSizeChart * i2);
@@ -941,7 +946,7 @@ function renderDistanceChart(hass, m2, unit, maxLabels = ["Max Move", "Max Still
       <line x1=${gx} y1=${TOP} x2=${gx} y2=${plotBottom}
         stroke="var(--divider-color, #555)" stroke-width="1" opacity="0.3"></line>
       <text x=${gx} y=${plotBottom + 13} font-size="11" text-anchor="end"
-        transform="rotate(-45 ${gx} ${plotBottom + 13})" fill=${TXT2}>${val.toFixed(0)} ${unit}</text>`);
+        transform="rotate(-45 ${gx} ${plotBottom + 13})" fill=${TXT2}>${tickFmt(val)} ${unit}</text>`);
   }
   const rowEls = rows.map((r2, i2) => {
     const y3 = TOP + i2 * ROW_H;
@@ -1025,7 +1030,7 @@ const _ApolloLd2410DistanceCard = class _ApolloLd2410DistanceCard extends i {
     if (!this.hass || !this._config) return A;
     const m2 = resolveEntities(this.hass, this._config);
     const profile = resolveProfile(this.hass, this._config);
-    const unit = this._config.distance_unit ?? "in";
+    const unit = isValidUom(this._config.distance_unit) ? this._config.distance_unit : defaultDistanceUnit(this.hass);
     const chart = renderDistanceChart(this.hass, m2, unit, profile == null ? void 0 : profile.maxBarLabels);
     if (chart === A) return A;
     return b`
@@ -1050,13 +1055,15 @@ __decorateClass$1([
 if (!customElements.get("apollo-radar-distance-card")) {
   customElements.define("apollo-radar-distance-card", ApolloLd2410DistanceCard);
 }
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "apollo-radar-distance-card",
-  name: "Apollo Radar Distance Chart",
-  description: "Distance / zone chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
-  documentationURL: "https://github.com/ApolloAutomation/dashboard-cards"
-});
+const customCards$1 = window.customCards = window.customCards || [];
+if (!customCards$1.some((c2) => c2.type === "apollo-radar-distance-card")) {
+  customCards$1.push({
+    type: "apollo-radar-distance-card",
+    name: "Apollo Radar Distance Chart",
+    description: "Distance / zone chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
+    documentationURL: "https://github.com/bharvey88/apollo-mmwave"
+  });
+}
 const MOVE_COLOR = "#4b0082";
 const MOVE_THR_COLOR = "#9467bd";
 const STILL_COLOR = "#274e13";
@@ -1217,13 +1224,15 @@ __decorateClass([
 if (!customElements.get("apollo-radar-gate-energy-card")) {
   customElements.define("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
 }
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "apollo-radar-gate-energy-card",
-  name: "Apollo Radar Gate Energy Chart",
-  description: "Per-gate move/still energy chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
-  documentationURL: "https://github.com/ApolloAutomation/dashboard-cards"
-});
+const customCards = window.customCards = window.customCards || [];
+if (!customCards.some((c2) => c2.type === "apollo-radar-gate-energy-card")) {
+  customCards.push({
+    type: "apollo-radar-gate-energy-card",
+    name: "Apollo Radar Gate Energy Chart",
+    description: "Per-gate move/still energy chart for Apollo MSR (LD2410) & R-PRO (LD2412).",
+    documentationURL: "https://github.com/bharvey88/apollo-mmwave"
+  });
+}
 function ld2450TargetPairs(base) {
   return [1, 2, 3].map((n3) => ({
     x: `sensor.${base}_ld2450_target_${n3}_x`,
@@ -1424,6 +1433,25 @@ function cardMap(hass, dev, distanceUnit) {
   }
   return cards;
 }
+function buildDeviceCards(hass, dev, distanceUnit) {
+  const c2 = cardMap(hass, dev, distanceUnit);
+  return [
+    c2.help,
+    c2.controls,
+    c2.range,
+    c2.rangeNote,
+    c2.zone,
+    c2.distance,
+    c2.gateEnergy,
+    c2.moveThr,
+    c2.stillThr,
+    c2.gateNote,
+    c2.occupancy,
+    c2.history,
+    c2.zoneHeader,
+    c2.zoneMap
+  ].filter(Boolean);
+}
 function buildDeviceSections(hass, dev, distanceUnit) {
   const c2 = cardMap(hass, dev, distanceUnit);
   const columns = [];
@@ -1465,11 +1493,18 @@ function generateSections(hass, config) {
     (d2) => buildDeviceSections(hass, d2, config.distance_unit)
   );
 }
+function generateCards(hass, config) {
+  return targetDevices(hass, config).flatMap(
+    (d2) => buildDeviceCards(hass, d2, config.distance_unit)
+  );
+}
 function radarDeviceKey(hass) {
   return detectRadarDevices(hass).map((d2) => d2.deviceId).sort().join(",");
 }
 function shouldRegenerate(_config, oldHass, newHass) {
-  if (oldHass.devices === newHass.devices) return false;
+  if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
+    return false;
+  }
   return radarDeviceKey(oldHass) !== radarDeviceKey(newHass);
 }
 const EMPTY_VIEW = {
@@ -1477,7 +1512,7 @@ const EMPTY_VIEW = {
   cards: [
     {
       type: "markdown",
-      content: "No Apollo radar devices found. Make sure your MSR (LD2410) or R-PRO (LD2412) is added to Home Assistant."
+      content: "No Apollo mmWave devices found. Make sure your MSR-1/MSR-2 (LD2410), R-PRO-1 (LD2412 + LD2450), or MTR-1 (LD2450) is added to Home Assistant."
     }
   ]
 };
@@ -1499,10 +1534,23 @@ const _ApolloLd2410DashboardStrategy = class _ApolloLd2410DashboardStrategy exte
 };
 _ApolloLd2410DashboardStrategy.shouldRegenerate = shouldRegenerate;
 let ApolloLd2410DashboardStrategy = _ApolloLd2410DashboardStrategy;
+const _ApolloRadarSectionStrategy = class _ApolloRadarSectionStrategy extends HTMLElement {
+  static async generate(config, hass) {
+    return { type: "grid", cards: generateCards(hass, config) };
+  }
+};
+_ApolloRadarSectionStrategy.shouldRegenerate = shouldRegenerate;
+let ApolloRadarSectionStrategy = _ApolloRadarSectionStrategy;
 if (!customElements.get("ll-strategy-view-apollo-radar-tuning")) {
   customElements.define(
     "ll-strategy-view-apollo-radar-tuning",
     ApolloLd2410ViewStrategy
+  );
+}
+if (!customElements.get("ll-strategy-section-apollo-radar-tuning")) {
+  customElements.define(
+    "ll-strategy-section-apollo-radar-tuning",
+    ApolloRadarSectionStrategy
   );
 }
 if (!customElements.get("ll-strategy-dashboard-apollo-radar-tuning")) {
@@ -1523,9 +1571,9 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "0.6.10";
+const CARD_VERSION = "1.1.0";
 console.info(
-  `%c APOLLO-DASHBOARD-CARDS %c v${CARD_VERSION} `,
+  `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",
   "color:#03a9f4;background:#fff;font-weight:700;"
 );

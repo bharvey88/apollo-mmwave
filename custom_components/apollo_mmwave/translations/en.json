@@ -2,7 +2,7 @@
     "config": {
         "step": {
             "user": {
-                "description": "Set up Apollo mmWave. On first setup an 'Apollo mmWave' dashboard is added to your sidebar with a tuning + zone-mapping tab for each detected Apollo mmWave device. You can turn this off in the integration options, or hide the dashboard from your profile later."
+                "description": "Set up Apollo mmWave. On first setup an 'Apollo mmWave' dashboard is added to your sidebar with a tuning + zone-mapping tab for each detected Apollo mmWave device. Tip: reload your browser once after setup (Ctrl/Cmd+Shift+R) so the dashboard's cards finish loading. You can turn the dashboard off in the integration options, or hide it from your profile later."
             }
         },
         "abort": {

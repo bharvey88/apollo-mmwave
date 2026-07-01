@@ -184,17 +184,14 @@ function cardMap(
       : undefined;
   }
 
-  // LD2450 zone map (R-PRO-1 / MTR-1). Kept visually separate from the tuning
-  // cards so it's clear the LD2450 is a different radar from the gate radar.
+  // LD2450 zone map (R-PRO-1 / MTR-1). Only labelled when it shares a tab with
+  // tuning cards (R-PRO-1) — a thin native section heading, so it's clear the
+  // LD2450 is a separate radar. Zone-only devices (MTR-1) get no header: the
+  // card is the whole tab.
   if (dev.ld2450) {
-    cards.zoneHeader = noteCard(
-      dev.profile
-        ? "## Zone Map\nThe **LD2450** tracking radar below is a *separate* " +
-            "radar from the gate-radar tuning. Draw occupancy zones over its " +
-            "live target positions."
-        : "## Zone Map\nDraw occupancy zones over the LD2450's live target " +
-            "positions."
-    );
+    cards.zoneHeader = dev.profile
+      ? { type: "heading", heading: "Zone Map" }
+      : undefined;
     cards.zoneMap = zoneMapperCard(dev.base, dev.name);
   }
 
@@ -255,14 +252,11 @@ export function buildDeviceSections(
     );
   }
 
-  // LD2450 zone map gets its own column. For zone-only devices (no gate radar)
-  // the help card leads this column since there are no tuning columns.
+  // LD2450 zone map gets its own column. On a shared tab (R-PRO-1) a thin
+  // heading precedes it; on a zone-only device (MTR-1) it's just the card —
+  // the tab title already names the device.
   if (c.zoneMap) {
-    columns.push(
-      dev.profile
-        ? [c.zoneHeader, c.zoneMap]
-        : [c.help, c.zoneHeader, c.zoneMap]
-    );
+    columns.push([c.zoneHeader, c.zoneMap]);
   }
 
   return columns

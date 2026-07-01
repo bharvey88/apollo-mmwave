@@ -1419,9 +1419,7 @@ function cardMap(hass, dev, distanceUnit) {
     } : void 0;
   }
   if (dev.ld2450) {
-    cards.zoneHeader = noteCard(
-      dev.profile ? "## Zone Map\nThe **LD2450** tracking radar below is a *separate* radar from the gate-radar tuning. Draw occupancy zones over its live target positions." : "## Zone Map\nDraw occupancy zones over the LD2450's live target positions."
-    );
+    cards.zoneHeader = dev.profile ? { type: "heading", heading: "Zone Map" } : void 0;
     cards.zoneMap = zoneMapperCard(dev.base, dev.name);
   }
   return cards;
@@ -1445,9 +1443,7 @@ function buildDeviceSections(hass, dev, distanceUnit) {
     );
   }
   if (c2.zoneMap) {
-    columns.push(
-      dev.profile ? [c2.zoneHeader, c2.zoneMap] : [c2.help, c2.zoneHeader, c2.zoneMap]
-    );
+    columns.push([c2.zoneHeader, c2.zoneMap]);
   }
   return columns.map((col) => col.filter(Boolean)).filter((col) => col.length > 0).map((cards) => ({ type: "grid", cards }));
 }

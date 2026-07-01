@@ -35,7 +35,8 @@ so adding or removing a sensor just adds or removes a tab — nothing to maintai
 1. HACS → ⋮ → **Custom repositories** → add this repo as type **Integration**.
 2. Install **Apollo mmWave**, then restart Home Assistant.
 3. **Settings → Devices & Services → Add Integration → Apollo mmWave.**
-4. Open the new **Apollo mmWave** dashboard in your sidebar.
+4. **Reload your browser once** (Ctrl/Cmd+Shift+R) so the dashboard's cards load.
+5. Open the new **Apollo mmWave** dashboard in your sidebar.
 
 Prefer to lay things out yourself? Turn off the dashboard in the integration's
 options, or just hide it from your profile — the cards and strategy are still

@@ -1,9 +1,9 @@
 """
-Config and options flow for Zone Mapper.
+Config and options flow for Apollo mmWave.
 
 The integration is UI-configurable and has a single setup step that just
 creates the singleton entry. The options flow exposes a single toggle for the
-first-run auto-view seeding.
+auto-created dashboard.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 
-class ZoneMapperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Config flow to create a single Zone Mapper entry."""
+class ApolloMmwaveConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Config flow to create a single Apollo mmWave entry."""
 
     VERSION = 1
 
@@ -39,7 +39,7 @@ class ZoneMapperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(title="Zone Mapper", data={})
+            return self.async_create_entry(title="Apollo mmWave", data={})
 
         return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
 
@@ -47,13 +47,13 @@ class ZoneMapperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: ConfigEntry,
-    ) -> ZoneMapperOptionsFlow:
+    ) -> ApolloMmwaveOptionsFlow:
         """Return the options flow for this entry."""
-        return ZoneMapperOptionsFlow(config_entry)
+        return ApolloMmwaveOptionsFlow(config_entry)
 
 
-class ZoneMapperOptionsFlow(config_entries.OptionsFlow):
-    """Options flow with a single toggle for auto-view seeding."""
+class ApolloMmwaveOptionsFlow(config_entries.OptionsFlow):
+    """Options flow with a single toggle for the auto-created dashboard."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Store the entry the options apply to."""
@@ -62,7 +62,7 @@ class ZoneMapperOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Prompt for the auto-view toggle and save it."""
+        """Prompt for the dashboard toggle and save it."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 

@@ -1,0 +1,11 @@
+# pytest-homeassistant-custom-component pins its matching homeassistant
+# version (0.13.281 == HA 2025.9.4 — keep in lockstep with requirements.txt).
+pytest-homeassistant-custom-component==0.13.281
+
+# HA 2025.9.4 ships aiodns 3.5.0, which breaks against pycares 5.x
+# (pycares.ares_query_a_result was removed); keep pycares on 4.x.
+pycares<5
+
+# The integration's manifest depends on `frontend`, whose setup imports
+# hass_frontend. Pinned to HA 2025.9.4's package_constraints.txt.
+home-assistant-frontend==20250903.5

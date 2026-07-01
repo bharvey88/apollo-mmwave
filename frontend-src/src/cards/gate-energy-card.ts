@@ -1,12 +1,26 @@
-import { LitElement, html, css, nothing, type TemplateResult } from "lit";
+import {
+  LitElement,
+  html,
+  css,
+  nothing,
+  type PropertyValues,
+  type TemplateResult,
+} from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant, Ld2410CardConfig } from "../types";
-import { resolveEntities } from "../entities";
+import {
+  resolveRadar,
+  resolvedStatesChanged,
+  anyResolved,
+  type ResolvedRadar,
+} from "./resolution";
 import { renderGateEnergyChart } from "../charts/gate-energy-chart";
 
 export class ApolloLd2410GateEnergyCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private _config?: Ld2410CardConfig;
+
+  private _resolved?: ResolvedRadar;
 
   public setConfig(config: Ld2410CardConfig): void {
     this._config = config;
@@ -20,9 +34,28 @@ export class ApolloLd2410GateEnergyCard extends LitElement {
     return { type: "custom:apollo-radar-gate-energy-card" };
   }
 
+  /** Skip the hass ticks (most of them) that touch none of our entities. */
+  protected shouldUpdate(changed: PropertyValues): boolean {
+    if (!changed.has("hass") || changed.has("_config")) return true;
+    const oldHass = changed.get("hass") as HomeAssistant | undefined;
+    if (!oldHass || !this.hass || !this._config) return true;
+    // Registry changes can alter resolution — re-render.
+    if (
+      oldHass.entities !== this.hass.entities ||
+      oldHass.devices !== this.hass.devices
+    ) {
+      return true;
+    }
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    return resolvedStatesChanged(oldHass, this.hass, this._resolved.ids);
+  }
+
   protected render(): TemplateResult | typeof nothing {
     if (!this.hass || !this._config) return nothing;
-    const m = resolveEntities(this.hass, this._config);
+    this._resolved = resolveRadar(this._resolved, this.hass, this._config);
+    const { map: m, ids } = this._resolved;
+    // A configured card whose device vanished must say so, not render blank.
+    if (!anyResolved(this.hass, ids)) return this._renderNotFound();
     const chart = renderGateEnergyChart(this.hass, m);
     if (chart === nothing) return nothing;
     return html`
@@ -32,9 +65,25 @@ export class ApolloLd2410GateEnergyCard extends LitElement {
     `;
   }
 
+  private _renderNotFound(): TemplateResult {
+    return html`
+      <ha-card .header=${this._config?.title ?? "LD2410 Gate Energy"}>
+        <div class="not-found">
+          Apollo mmWave: device not found — check the card's device
+          configuration.
+        </div>
+      </ha-card>
+    `;
+  }
+
   static styles = css`
     .wrap {
       padding: 4px 12px 12px;
+    }
+    .not-found {
+      padding: 12px 16px 16px;
+      color: var(--error-color, #db4437);
+      font-size: 0.9em;
     }
     .chart-legend {
       font-size: 0.8em;

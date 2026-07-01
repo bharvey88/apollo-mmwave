@@ -137,6 +137,42 @@ export const LD2412_PROFILE: RadarProfile = {
 // LD2412 is checked first (more specific naming) so it wins on an R-PRO-1.
 export const PROFILES: RadarProfile[] = [LD2412_PROFILE, LD2410_PROFILE];
 
+/** What the device registry tells us about an Apollo device's radar hardware. */
+export interface ApolloModelInfo {
+  /** Expected gate-radar tuning profile; undefined for zone-only devices (MTR-1). */
+  profile?: RadarProfile;
+  /** Whether the model ships an LD2450 tracking radar. */
+  ld2450: boolean;
+}
+
+/** Known Apollo mmWave models → expected hardware. Matched by prefix because
+ *  hardware variants extend the model string (R-PRO-1-W / R-PRO-1-ETH). */
+const APOLLO_MODELS: { prefix: string; profile?: RadarProfile; ld2450: boolean }[] = [
+  { prefix: "msr-1", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "msr-2", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "mtr-1", ld2450: true },
+  { prefix: "r-pro-1", profile: LD2412_PROFILE, ld2450: true },
+];
+
+/**
+ * Registry-first detection: ESPHome publishes the firmware project name into
+ * the device registry as manufacturer/model ("ApolloAutomation" / "MSR-2"),
+ * which survives entity renames and HA's `_2` entity-id dedup — unlike
+ * anything derived from entity ids. Case-insensitive; returns undefined for
+ * non-Apollo or unknown-model devices (callers then fall back to
+ * entity-suffix detection for DIY/renamed builds).
+ */
+export function apolloModelInfo(device?: {
+  manufacturer?: string;
+  model?: string;
+}): ApolloModelInfo | undefined {
+  if (!device?.manufacturer || !device.model) return undefined;
+  if (device.manufacturer.toLowerCase() !== "apolloautomation") return undefined;
+  const model = device.model.toLowerCase();
+  const hit = APOLLO_MODELS.find((m) => model.startsWith(m.prefix));
+  return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : undefined;
+}
+
 /** Pick the profile whose engineering-mode switch exists for this device. */
 export function detectProfile(
   hass: HomeAssistant,

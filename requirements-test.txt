@@ -8,4 +8,4 @@ pycares<5
 
 # The integration's manifest depends on `frontend`, whose setup imports
 # hass_frontend. Pinned to HA 2025.9.4's package_constraints.txt.
-home-assistant-frontend==20250903.5
+home-assistant-frontend==20260128.6

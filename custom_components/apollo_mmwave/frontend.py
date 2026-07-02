@@ -114,13 +114,31 @@ async def _async_register_lovelace_resources(
     whenever a Lovelace panel initializes, so they reach existing tabs too.
 
     The resource collection is not a public contract (same as the dashboards
-    dict), so failures are logged and swallowed; extra JS remains the fallback.
+    dict), so failures can't break setup — but they must be LOUD: browsers with
+    a cached app shell never see extra JS urls, so without the resource the
+    dashboard times out waiting for the strategy element and only a hard
+    refresh recovers. Every non-success branch logs at warning with the reason.
     """
     try:
         lovelace_data = hass.data.get(LOVELACE_DATA)
         resources = getattr(lovelace_data, "resources", None)
-        if resources is None or not hasattr(resources, "async_create_item"):
-            # YAML-mode resource list (read-only) or Lovelace not ready.
+        if resources is None:
+            _LOGGER.warning(
+                "Apollo mmWave: Lovelace resource collection unavailable"
+                " (lovelace data: %s); cards may not load in already-open"
+                " browser tabs until a hard refresh (Ctrl/Cmd+Shift+R).",
+                type(lovelace_data).__name__,
+            )
+            return
+        if not hasattr(resources, "async_create_item"):
+            _LOGGER.warning(
+                "Apollo mmWave: Lovelace resources are managed in YAML on this"
+                " system (%s), so they can't be registered automatically. Add"
+                " these module resources to your lovelace resources config,"
+                " or the dashboard/cards won't load without a hard refresh: %s",
+                type(resources).__name__,
+                ", ".join(js_urls),
+            )
             return
         if not getattr(resources, "loaded", True):
             await resources.async_load()
@@ -131,17 +149,31 @@ async def _async_register_lovelace_resources(
             url = str(item.get("url", ""))
             existing[url.partition("?")[0]] = item
 
+        created: list[str] = []
+        updated: list[str] = []
         for url in js_urls:
             item = existing.get(url.partition("?")[0])
             if item is None:
                 await resources.async_create_item({"res_type": "module", "url": url})
+                created.append(url)
             elif item.get("url") != url:
                 # Same bundle, older ?v= cache-buster: point it at this version.
                 await resources.async_update_item(item["id"], {"url": url})
+                updated.append(url)
+        if created or updated:
+            _LOGGER.info(
+                "Apollo mmWave: Lovelace resources registered (created: %s;"
+                " updated: %s)",
+                created or "none",
+                updated or "none",
+            )
+        else:
+            _LOGGER.debug("Apollo mmWave: Lovelace resources already current.")
     except Exception:  # noqa: BLE001
-        _LOGGER.debug(
-            "Apollo mmWave: could not register Lovelace resources; relying on"
-            " extra JS only.",
+        _LOGGER.warning(
+            "Apollo mmWave: could not register Lovelace resources; the"
+            " dashboard/cards won't load in browsers with a cached app shell"
+            " until a hard refresh. Please report this traceback:",
             exc_info=True,
         )
 

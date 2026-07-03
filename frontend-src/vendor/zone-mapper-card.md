@@ -16,13 +16,17 @@ When pulling a newer upstream build, re-apply these two patches:
    intentionally left unchanged.)
 
 2. **Registration guard** — wrap the element definition so a user who also has
-   the standalone card installed doesn't hit a custom-element name collision:
+   the standalone card installed doesn't hit a custom-element name collision.
 
-   ```js
-   if (!customElements.get('zone-mapper-card')) {
-     customElements.define('zone-mapper-card', ZoneMapperCard);
-   }
-   ```
+3. **Polyfill-aware registration** — HA's frontend loads the
+   `@webcomponents/scoped-custom-element-registry` polyfill inside the async
+   app bundle; anything defined on the native registry before that polyfill
+   installs is invisible to Lovelace lookups ("Custom element doesn't exist").
+   Replace the guarded define from patch 2 with the IIFE at the end of the
+   current file: it defines immediately, then re-asserts via a fresh
+   `window.customElements` once `home-assistant`/`hc-main` are defined (the
+   app is booted and the registry is final by then). This mirrors
+   `frontend-src/src/register.ts` — keep the two in sync.
 
-Both are mechanical string replacements (see the scaffolding commit for the
-exact script).
+All are mechanical replacements (see the scaffolding commit and the 1.2.2
+commit for the exact edits).

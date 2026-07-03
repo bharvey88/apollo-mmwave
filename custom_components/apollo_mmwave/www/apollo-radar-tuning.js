@@ -929,6 +929,28 @@ function resolvedStatesChanged(oldHass, newHass, ids) {
 function anyResolved(hass, ids) {
   return ids.some((id) => id in hass.states);
 }
+const pending = /* @__PURE__ */ new Map();
+let reassertHooked = false;
+function safeDefine(tag, ctor) {
+  try {
+    if (!window.customElements.get(tag)) {
+      window.customElements.define(tag, ctor);
+    }
+  } catch {
+  }
+}
+function reassertAll() {
+  for (const [tag, ctor] of pending) safeDefine(tag, ctor);
+}
+function registerElement(tag, ctor) {
+  pending.set(tag, ctor);
+  safeDefine(tag, ctor);
+  if (reassertHooked) return;
+  reassertHooked = true;
+  for (const marker of ["home-assistant", "hc-main"]) {
+    window.customElements.whenDefined(marker).then(reassertAll, () => void 0);
+  }
+}
 const VALID_UOMS = ["mm", "cm", "m", "in", "ft", "yd"];
 const METERS_PER = {
   mm: 1e-3,
@@ -1235,9 +1257,7 @@ __decorateClass$1([
 __decorateClass$1([
   r()
 ], ApolloLd2410DistanceCard.prototype, "_config");
-if (!customElements.get("apollo-radar-distance-card")) {
-  customElements.define("apollo-radar-distance-card", ApolloLd2410DistanceCard);
-}
+registerElement("apollo-radar-distance-card", ApolloLd2410DistanceCard);
 const customCards$1 = window.customCards = window.customCards || [];
 if (!customCards$1.some((c2) => c2.type === "apollo-radar-distance-card")) {
   customCards$1.push({
@@ -1433,9 +1453,7 @@ __decorateClass([
 __decorateClass([
   r()
 ], ApolloLd2410GateEnergyCard.prototype, "_config");
-if (!customElements.get("apollo-radar-gate-energy-card")) {
-  customElements.define("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
-}
+registerElement("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
 const customCards = window.customCards = window.customCards || [];
 if (!customCards.some((c2) => c2.type === "apollo-radar-gate-energy-card")) {
   customCards.push({
@@ -1770,24 +1788,15 @@ const _ApolloRadarSectionStrategy = class _ApolloRadarSectionStrategy extends HT
 };
 _ApolloRadarSectionStrategy.shouldRegenerate = shouldRegenerate;
 let ApolloRadarSectionStrategy = _ApolloRadarSectionStrategy;
-if (!customElements.get("ll-strategy-view-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-view-apollo-radar-tuning",
-    ApolloLd2410ViewStrategy
-  );
-}
-if (!customElements.get("ll-strategy-section-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-section-apollo-radar-tuning",
-    ApolloRadarSectionStrategy
-  );
-}
-if (!customElements.get("ll-strategy-dashboard-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-dashboard-apollo-radar-tuning",
-    ApolloLd2410DashboardStrategy
-  );
-}
+registerElement("ll-strategy-view-apollo-radar-tuning", ApolloLd2410ViewStrategy);
+registerElement(
+  "ll-strategy-section-apollo-radar-tuning",
+  ApolloRadarSectionStrategy
+);
+registerElement(
+  "ll-strategy-dashboard-apollo-radar-tuning",
+  ApolloLd2410DashboardStrategy
+);
 window.customStrategies = window.customStrategies || [];
 if (!window.customStrategies.some(
   (s2) => s2.type === "apollo-radar-tuning"
@@ -1800,7 +1809,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.2.1";
+const CARD_VERSION = "1.2.2";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

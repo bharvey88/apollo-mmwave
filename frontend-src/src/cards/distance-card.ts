@@ -14,6 +14,7 @@ import {
   anyResolved,
   type ResolvedRadar,
 } from "./resolution";
+import { registerElement } from "../register";
 import { renderDistanceChart } from "../charts/distance-chart";
 import { defaultDistanceUnit, isValidUom, type Uom } from "../charts/unit-convert";
 
@@ -93,9 +94,7 @@ export class ApolloLd2410DistanceCard extends LitElement {
   `;
 }
 
-if (!customElements.get("apollo-radar-distance-card")) {
-  customElements.define("apollo-radar-distance-card", ApolloLd2410DistanceCard);
-}
+registerElement("apollo-radar-distance-card", ApolloLd2410DistanceCard);
 
 const customCards = ((window as any).customCards =
   (window as any).customCards || []);

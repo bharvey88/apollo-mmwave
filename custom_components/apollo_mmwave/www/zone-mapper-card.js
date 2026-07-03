@@ -2623,9 +2623,26 @@ class ZoneMapperCard extends HTMLElement {
   }
 }
 
-if (!customElements.get('zone-mapper-card')) {
-  customElements.define('zone-mapper-card', ZoneMapperCard);
-}
+// Vendor patch 3 (see frontend-src/vendor/zone-mapper-card.md): HA's scoped
+// custom-element-registry polyfill loads inside the async app bundle and its
+// get()/whenDefined() can't see elements defined on the native registry
+// before it installs. Define now, then re-assert once the HA app has booted
+// (window.customElements is final by the time home-assistant/hc-main define).
+(function () {
+  function safeDefine() {
+    try {
+      if (!window.customElements.get('zone-mapper-card')) {
+        window.customElements.define('zone-mapper-card', ZoneMapperCard);
+      }
+    } catch (e) {
+      /* already defined on this registry */
+    }
+  }
+  safeDefine();
+  ['home-assistant', 'hc-main'].forEach(function (marker) {
+    window.customElements.whenDefined(marker).then(safeDefine, function () {});
+  });
+})();
 
 window.customCards = window.customCards || [];
 window.customCards.push({

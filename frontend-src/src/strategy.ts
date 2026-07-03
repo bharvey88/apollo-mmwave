@@ -1,4 +1,5 @@
 import type { HomeAssistant } from "./types";
+import { registerElement } from "./register";
 import {
   detectRadarDevices,
   generateCards,
@@ -115,24 +116,15 @@ class ApolloRadarSectionStrategy extends HTMLElement {
   }
 }
 
-if (!customElements.get("ll-strategy-view-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-view-apollo-radar-tuning",
-    ApolloLd2410ViewStrategy
-  );
-}
-if (!customElements.get("ll-strategy-section-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-section-apollo-radar-tuning",
-    ApolloRadarSectionStrategy
-  );
-}
-if (!customElements.get("ll-strategy-dashboard-apollo-radar-tuning")) {
-  customElements.define(
-    "ll-strategy-dashboard-apollo-radar-tuning",
-    ApolloLd2410DashboardStrategy
-  );
-}
+registerElement("ll-strategy-view-apollo-radar-tuning", ApolloLd2410ViewStrategy);
+registerElement(
+  "ll-strategy-section-apollo-radar-tuning",
+  ApolloRadarSectionStrategy
+);
+registerElement(
+  "ll-strategy-dashboard-apollo-radar-tuning",
+  ApolloLd2410DashboardStrategy
+);
 
 // Surface the dashboard strategy in HA's "New Dashboard → Community Dashboards"
 // picker (HA 2026.5+), so users add the tuning dashboard with no YAML.

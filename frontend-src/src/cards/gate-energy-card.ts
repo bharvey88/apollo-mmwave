@@ -14,6 +14,7 @@ import {
   anyResolved,
   type ResolvedRadar,
 } from "./resolution";
+import { registerElement } from "../register";
 import { renderGateEnergyChart } from "../charts/gate-energy-chart";
 
 export class ApolloLd2410GateEnergyCard extends LitElement {
@@ -96,9 +97,7 @@ export class ApolloLd2410GateEnergyCard extends LitElement {
   `;
 }
 
-if (!customElements.get("apollo-radar-gate-energy-card")) {
-  customElements.define("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
-}
+registerElement("apollo-radar-gate-energy-card", ApolloLd2410GateEnergyCard);
 
 const customCards = ((window as any).customCards =
   (window as any).customCards || []);

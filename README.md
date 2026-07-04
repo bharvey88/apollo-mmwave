@@ -41,6 +41,25 @@ so adding or removing a sensor just adds or removes a tab — nothing to maintai
 The integration registers its JS as a Lovelace resource, so the cards work in
 already-open tabs — no browser reload needed.
 
+## Choosing which devices appear
+
+By default the dashboard auto-detects **online** Apollo mmWave devices — a
+device that is unplugged, or a leftover registry entry from reflashed
+hardware, gets no tab. To control this yourself, open the integration's
+options (Settings → Devices & Services → Apollo mmWave → Configure) and pick
+**Dashboard devices**: the dashboard then shows exactly those devices,
+including ones that are currently offline. Leave the selection empty to go
+back to automatic detection. Changes apply immediately.
+
+The same knob exists for hand-written strategies as a `devices` list:
+
+```yaml
+strategy:
+  type: custom:apollo-radar-tuning
+  devices:
+    - your_device_id   # exactly these, online or not
+```
+
 ## Use your own dashboards instead
 
 Prefer to lay things out yourself? Turn off the dashboard during setup (or any

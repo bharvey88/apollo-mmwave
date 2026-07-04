@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_AUTO_CREATE_VIEW,
+    CONF_DASHBOARD_DEVICES,
     DEFAULT_AUTO_CREATE_VIEW,
     DOMAIN,
 )
@@ -77,16 +79,31 @@ class ApolloMmwaveOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Prompt for the dashboard toggle and save it."""
+        """Prompt for the dashboard toggle and device selection, and save."""
         if user_input is not None:
+            user_input.setdefault(CONF_DASHBOARD_DEVICES, [])
             return self.async_create_entry(title="", data=user_input)
 
-        current = self._config_entry.options.get(
+        current_auto = self._config_entry.options.get(
             CONF_AUTO_CREATE_VIEW, DEFAULT_AUTO_CREATE_VIEW
         )
+        current_devices = self._config_entry.options.get(CONF_DASHBOARD_DEVICES, [])
         schema = vol.Schema(
             {
-                vol.Required(CONF_AUTO_CREATE_VIEW, default=current): bool,
+                vol.Required(CONF_AUTO_CREATE_VIEW, default=current_auto): bool,
+                vol.Optional(
+                    CONF_DASHBOARD_DEVICES,
+                    default=list(current_devices),
+                ): selector.DeviceSelector(
+                    selector.DeviceSelectorConfig(
+                        multiple=True,
+                        filter=[
+                            selector.DeviceFilterSelectorConfig(
+                                manufacturer="ApolloAutomation"
+                            )
+                        ],
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -1594,15 +1594,16 @@ function hasLiveRadarEvidence(hass, deviceId, registryMatched) {
     ([id, e2]) => e2.device_id === deviceId && isLive(hass, id)
   );
 }
-function deviceFromId(hass, deviceId) {
+function deviceFromId(hass, deviceId, forced = false) {
   const d2 = hass.devices[deviceId];
+  if (forced && !d2) return void 0;
   const reg = apolloModelInfo(d2);
   const base = baseNameFromDevice(hass, deviceId);
-  if (!reg && !base) return void 0;
-  if (!hasLiveRadarEvidence(hass, deviceId, !!reg)) return void 0;
+  if (!forced && !reg && !base) return void 0;
+  if (!forced && !hasLiveRadarEvidence(hass, deviceId, !!reg)) return void 0;
   const profile = detectProfileFromEntities(hass, deviceId) ?? (reg == null ? void 0 : reg.profile);
   const ld2450 = hasLd2450Device(hass, deviceId) || (base ? hasLd2450(hass, base) : false) || ((reg == null ? void 0 : reg.ld2450) ?? false);
-  if (!profile && !ld2450) return void 0;
+  if (!forced && !profile && !ld2450) return void 0;
   return {
     deviceId,
     // The base doubles as the view path, so a registry-matched device whose
@@ -1621,10 +1622,14 @@ function detectRadarDevices(hass) {
   }
   return out;
 }
-function targetDevices(hass, config) {
+function strategyDevices(hass, config) {
+  var _a2;
   if (config.device_id) {
-    const d2 = deviceFromId(hass, config.device_id);
+    const d2 = deviceFromId(hass, config.device_id, true);
     return d2 ? [d2] : [];
+  }
+  if ((_a2 = config.devices) == null ? void 0 : _a2.length) {
+    return config.devices.map((id) => deviceFromId(hass, id, true)).filter((d2) => d2 !== void 0);
   }
   return detectRadarDevices(hass);
 }
@@ -1638,6 +1643,14 @@ function entitiesCard(title, rows) {
   };
 }
 function helpCard(dev) {
+  if (!dev.profile && !dev.ld2450) {
+    return {
+      type: "markdown",
+      content: `**${dev.name}** — no radar data available right now.
+
+The device looks offline (or exposes no recognizable radar entities). Its cards will appear here once it reports in.`
+    };
+  }
   if (!dev.profile) {
     return {
       type: "markdown",
@@ -1769,28 +1782,32 @@ function deviceView(hass, dev, distanceUnit) {
   };
 }
 function generateViews(hass, config) {
-  return targetDevices(hass, config).map(
+  return strategyDevices(hass, config).map(
     (d2) => deviceView(hass, d2, config.distance_unit)
   );
 }
 function generateSections(hass, config) {
-  return targetDevices(hass, config).flatMap(
+  return strategyDevices(hass, config).flatMap(
     (d2) => buildDeviceSections(hass, d2, config.distance_unit)
   );
 }
 function generateCards(hass, config) {
-  return targetDevices(hass, config).flatMap(
+  return strategyDevices(hass, config).flatMap(
     (d2) => buildDeviceCards(hass, d2, config.distance_unit)
   );
 }
-function radarDeviceKey(hass) {
-  return detectRadarDevices(hass).map((d2) => d2.deviceId).sort().join(",");
+function radarDeviceKey(hass, config) {
+  return strategyDevices(hass, config).map((d2) => {
+    var _a2;
+    return `${d2.deviceId}:${((_a2 = d2.profile) == null ? void 0 : _a2.key) ?? ""}:${d2.ld2450 ? 1 : 0}`;
+  }).sort().join(",");
 }
-function shouldRegenerate(_config, oldHass, newHass) {
+function shouldRegenerate(config, oldHass, newHass) {
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
     return false;
   }
-  return radarDeviceKey(oldHass) !== radarDeviceKey(newHass);
+  const cfg = config ?? {};
+  return radarDeviceKey(oldHass, cfg) !== radarDeviceKey(newHass, cfg);
 }
 const EMPTY_VIEW = {
   title: "Apollo Radar Tuning",
@@ -1847,7 +1864,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.2.3";
+const CARD_VERSION = "1.3.0";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

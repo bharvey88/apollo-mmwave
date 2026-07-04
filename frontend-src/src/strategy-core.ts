@@ -32,6 +32,10 @@ export interface RadarDevice {
 
 export interface StrategyConfig {
   device_id?: string;
+  /** Explicit selection: show exactly these devices, online or not. Set by
+   *  the integration's "Dashboard devices" option (or by hand in YAML).
+   *  Empty/absent means automatic detection of live devices. */
+  devices?: string[];
   distance_unit?: string;
 }
 
@@ -91,18 +95,22 @@ function hasLiveRadarEvidence(
 
 function deviceFromId(
   hass: HomeAssistant,
-  deviceId: string
+  deviceId: string,
+  // An explicitly selected device (options / device_id / devices config) is
+  // shown even while offline — the user asked for it by name.
+  forced = false
 ): RadarDevice | undefined {
   const d = hass.devices[deviceId];
+  if (forced && !d) return undefined; // selection points at a deleted device
   // Registry-first: manufacturer/model survive entity renames and `_2` dedup.
   const reg = apolloModelInfo(d);
   const base = baseNameFromDevice(hass, deviceId);
-  if (!reg && !base) return undefined;
+  if (!forced && !reg && !base) return undefined;
 
   // Ghost/offline filter — also covers the freshly-added-device race (its
   // entities/states aren't in yet): the later entities-registry update still
   // counts as a device-set change and triggers a regeneration.
-  if (!hasLiveRadarEvidence(hass, deviceId, !!reg)) return undefined;
+  if (!forced && !hasLiveRadarEvidence(hass, deviceId, !!reg)) return undefined;
 
   // Entities win over the registry model when they give a concrete chip match
   // (DIY/reflashed hardware); the registry decides when probing is blind
@@ -112,8 +120,10 @@ function deviceFromId(
     hasLd2450Device(hass, deviceId) ||
     (base ? hasLd2450(hass, base) : false) ||
     (reg?.ld2450 ?? false);
-  // Include the device if it has either a tunable gate radar or an LD2450.
-  if (!profile && !ld2450) return undefined;
+  // Include the device if it has either a tunable gate radar or an LD2450 —
+  // a forced device stays even if neither is detectable (offline + unknown
+  // model): its tab explains the situation instead of silently vanishing.
+  if (!forced && !profile && !ld2450) return undefined;
   return {
     deviceId,
     // The base doubles as the view path, so a registry-matched device whose
@@ -135,13 +145,20 @@ export function detectRadarDevices(hass: HomeAssistant): RadarDevice[] {
   return out;
 }
 
-function targetDevices(
+/** The devices a strategy config renders: one explicit device, the explicit
+ *  selection list (forced, shown even offline), or auto-detected live ones. */
+export function strategyDevices(
   hass: HomeAssistant,
   config: StrategyConfig
 ): RadarDevice[] {
   if (config.device_id) {
-    const d = deviceFromId(hass, config.device_id);
+    const d = deviceFromId(hass, config.device_id, true);
     return d ? [d] : [];
+  }
+  if (config.devices?.length) {
+    return config.devices
+      .map((id) => deviceFromId(hass, id, true))
+      .filter((d): d is RadarDevice => d !== undefined);
   }
   return detectRadarDevices(hass);
 }
@@ -157,6 +174,17 @@ function entitiesCard(title: string, rows: Row[]): Record<string, any> | undefin
 }
 
 function helpCard(dev: RadarDevice): Record<string, any> {
+  if (!dev.profile && !dev.ld2450) {
+    // Forced (explicitly selected) device with nothing detectable — offline
+    // and no registry model to go by.
+    return {
+      type: "markdown",
+      content:
+        `**${dev.name}** — no radar data available right now.\n\n` +
+        `The device looks offline (or exposes no recognizable radar ` +
+        `entities). Its cards will appear here once it reports in.`,
+    };
+  }
   if (!dev.profile) {
     return {
       type: "markdown",
@@ -365,7 +393,7 @@ export function generateViews(
   hass: HomeAssistant,
   config: StrategyConfig
 ): Record<string, any>[] {
-  return targetDevices(hass, config).map((d) =>
+  return strategyDevices(hass, config).map((d) =>
     deviceView(hass, d, config.distance_unit)
   );
 }
@@ -375,7 +403,7 @@ export function generateSections(
   hass: HomeAssistant,
   config: StrategyConfig
 ): Record<string, any>[] {
-  return targetDevices(hass, config).flatMap((d) =>
+  return strategyDevices(hass, config).flatMap((d) =>
     buildDeviceSections(hass, d, config.distance_unit)
   );
 }
@@ -386,7 +414,7 @@ export function generateCards(
   hass: HomeAssistant,
   config: StrategyConfig
 ): Record<string, any>[] {
-  return targetDevices(hass, config).flatMap((d) =>
+  return strategyDevices(hass, config).flatMap((d) =>
     buildDeviceCards(hass, d, config.distance_unit)
   );
 }

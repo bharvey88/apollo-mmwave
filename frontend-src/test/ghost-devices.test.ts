@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { detectRadarDevices } from "../src/strategy-core";
+import {
+  buildDeviceCards,
+  detectRadarDevices,
+  strategyDevices,
+} from "../src/strategy-core";
 import type { HassEntity, HomeAssistant } from "../src/types";
 
 type Entities = Record<string, { device_id?: string }>;
@@ -89,6 +93,43 @@ describe("ghost/offline device filtering", () => {
       }
     );
     expect(detectRadarDevices(hass)).toHaveLength(0);
+  });
+
+  it("shows an explicitly selected device even while offline (devices config)", () => {
+    const { states, entities } = mtrFixture("unavailable");
+    const hass = hassWith(states, entities, { mtr: MTR_DEVICE });
+    // Auto-detection skips it…
+    expect(strategyDevices(hass, {})).toHaveLength(0);
+    // …but an explicit selection forces it, with capabilities from the registry.
+    const devices = strategyDevices(hass, { devices: ["mtr"] });
+    expect(devices).toHaveLength(1);
+    expect(devices[0].ld2450).toBe(true);
+  });
+
+  it("shows exactly the selected devices, hiding unselected live ones", () => {
+    const live = mtrFixture("1200");
+    const hass = hassWith(live.states, live.entities, {
+      mtr: MTR_DEVICE,
+      other: { ...MTR_DEVICE, name: "Other MTR-1" },
+    });
+    const devices = strategyDevices(hass, { devices: ["other"] });
+    expect(devices.map((d) => d.deviceId)).toEqual(["other"]);
+  });
+
+  it("drops a selected device that no longer exists in the registry", () => {
+    const hass = hassWith({}, {}, {});
+    expect(strategyDevices(hass, { devices: ["gone"] })).toHaveLength(0);
+  });
+
+  it("renders an offline note for a forced device with nothing detectable", () => {
+    const hass = hassWith({}, {}, {
+      mystery: { name: "Garage Sensor" }, // no manufacturer/model, no entities
+    });
+    const devices = strategyDevices(hass, { devices: ["mystery"] });
+    expect(devices).toHaveLength(1);
+    const cards = buildDeviceCards(hass, devices[0]);
+    expect(cards[0].type).toBe("markdown");
+    expect(cards[0].content).toContain("no radar data");
   });
 
   it("keeps a registry-matched device whose entities were renamed beyond recognition", () => {

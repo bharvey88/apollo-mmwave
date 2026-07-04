@@ -187,10 +187,26 @@ class StrategyDashboardConfig(LovelaceConfig):
     dashboard strategy then generates the views client-side on every load.
     """
 
-    def __init__(self, hass: HomeAssistant, url_path: str, strategy_type: str) -> None:
-        """Initialize with the url path and strategy type to serve."""
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        url_path: str,
+        strategy_type: str,
+        devices: list[str] | None = None,
+    ) -> None:
+        """Initialize with the url path and strategy config to serve."""
         super().__init__(hass, url_path, {CONF_URL_PATH: url_path})
-        self._strategy_config: dict[str, Any] = {"strategy": {"type": strategy_type}}
+        strategy: dict[str, Any] = {"type": strategy_type}
+        if devices:
+            # Explicit selection: the strategy shows exactly these devices,
+            # online or not, instead of auto-detecting live ones.
+            strategy["devices"] = list(devices)
+        self._strategy_config: dict[str, Any] = {"strategy": strategy}
+
+    @property
+    def strategy_devices(self) -> list[str]:
+        """Return the explicit device selection baked into this config."""
+        return list(self._strategy_config["strategy"].get("devices", []))
 
     @property
     @override
@@ -214,12 +230,15 @@ class StrategyDashboardConfig(LovelaceConfig):
         return json_fragment(json_bytes(self._strategy_config))
 
 
-async def async_register_dashboard(hass: HomeAssistant) -> bool:
+async def async_register_dashboard(
+    hass: HomeAssistant, devices: list[str] | None = None
+) -> bool:
     """
     Register the dedicated, strategy-backed "Apollo mmWave" sidebar dashboard.
 
-    Returns True if the dashboard is present (newly registered or already there),
-    False if the Lovelace environment wasn't ready and we should retry later.
+    Re-registers (and notifies open frontends) when the explicit device
+    selection changed. Returns True if the dashboard is present, False if the
+    Lovelace environment wasn't ready and we should retry later.
     """
     try:
         lovelace_data = hass.data.get(LOVELACE_DATA)
@@ -235,12 +254,23 @@ async def async_register_dashboard(hass: HomeAssistant) -> bool:
             )
             return True
 
-        if DASHBOARD_URL_PATH in dashboards:
-            _LOGGER.debug("Apollo mmWave: dashboard already registered.")
+        existing = dashboards.get(DASHBOARD_URL_PATH)
+        if isinstance(existing, StrategyDashboardConfig):
+            if existing.strategy_devices == list(devices or []):
+                _LOGGER.debug("Apollo mmWave: dashboard already registered.")
+                return True
+        elif existing is not None:
+            # A user-created dashboard occupies the url path; leave it alone.
+            _LOGGER.debug("Apollo mmWave: foreign dashboard on url path; skipping.")
             return True
 
         dashboards[DASHBOARD_URL_PATH] = StrategyDashboardConfig(
-            hass, DASHBOARD_URL_PATH, DASHBOARD_STRATEGY_TYPE
+            hass, DASHBOARD_URL_PATH, DASHBOARD_STRATEGY_TYPE, devices
+        )
+        # Open tabs subscribed to this dashboard re-fetch the config on this
+        # event, so an options change applies without a reload.
+        hass.bus.async_fire(
+            "lovelace_updated", {"url_path": DASHBOARD_URL_PATH, "mode": MODE_STORAGE}
         )
 
         if not frontend.async_panel_exists(hass, DASHBOARD_URL_PATH):

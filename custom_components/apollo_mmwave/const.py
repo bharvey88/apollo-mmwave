@@ -57,6 +57,11 @@ CARD_TYPE = "custom:zone-mapper-card"
 CONF_AUTO_CREATE_VIEW = "auto_create_view"
 DEFAULT_AUTO_CREATE_VIEW = True
 
+# Options flow: explicit device selection for the dashboard. Empty means
+# automatic detection (live Apollo mmWave devices); a non-empty list means
+# exactly these devices, shown even while offline/unplugged.
+CONF_DASHBOARD_DEVICES = "dashboard_devices"
+
 # Dedicated, strategy-backed dashboard this integration registers in the sidebar.
 # The dashboard config is just `{"strategy": {"type": DASHBOARD_STRATEGY_TYPE}}`;
 # the frontend strategy detects every Apollo mmWave device and builds one tab each.

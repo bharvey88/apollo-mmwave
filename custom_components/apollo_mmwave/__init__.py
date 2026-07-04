@@ -36,6 +36,7 @@ from .const import (
     ATTR_Y_MAX,
     ATTR_Y_MIN,
     CONF_AUTO_CREATE_VIEW,
+    CONF_DASHBOARD_DEVICES,
     COORD_SENSOR_UNIQUE_ID_FMT,
     DATA_STORE,
     DEFAULT_AUTO_CREATE_VIEW,
@@ -373,7 +374,7 @@ def _auto_create_dashboard_enabled(entry: ConfigEntry) -> bool:
 async def _async_apply_dashboard_option(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Register or remove the sidebar dashboard to match the current option."""
+    """Register or remove the sidebar dashboard to match the current options."""
     # Lazy import: keeps Lovelace internals out of the config-flow import path.
     from .frontend import (  # noqa: PLC0415
         async_register_dashboard,
@@ -381,7 +382,10 @@ async def _async_apply_dashboard_option(
     )
 
     if _auto_create_dashboard_enabled(entry):
-        await async_register_dashboard(hass)
+        devices = entry.options.get(CONF_DASHBOARD_DEVICES, [])
+        await async_register_dashboard(
+            hass, list(devices) if isinstance(devices, list) else []
+        )
     else:
         await async_remove_dashboard(hass)
 

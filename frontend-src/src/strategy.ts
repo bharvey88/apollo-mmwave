@@ -1,17 +1,19 @@
 import type { HomeAssistant } from "./types";
 import { registerElement } from "./register";
 import {
-  detectRadarDevices,
+  strategyDevices,
   generateCards,
   generateSections,
   generateViews,
   type StrategyConfig,
 } from "./strategy-core";
 
-/** Stable key for the set of Apollo mmWave devices currently present. */
-function radarDeviceKey(hass: HomeAssistant): string {
-  return detectRadarDevices(hass)
-    .map((d) => d.deviceId)
+/** Stable key for the devices this strategy config would render. Includes
+ *  detected capabilities so a forced (explicitly selected) device whose
+ *  entities register late still triggers a rebuild. */
+function radarDeviceKey(hass: HomeAssistant, config: StrategyConfig): string {
+  return strategyDevices(hass, config)
+    .map((d) => `${d.deviceId}:${d.profile?.key ?? ""}:${d.ld2450 ? 1 : 0}`)
     .sort()
     .join(",");
 }
@@ -33,7 +35,7 @@ function radarDeviceKey(hass: HomeAssistant): string {
  * appear until a manual page reload.
  */
 export function shouldRegenerate(
-  _config: StrategyConfig,
+  config: StrategyConfig,
   oldHass: HomeAssistant,
   newHass: HomeAssistant
 ): boolean {
@@ -42,7 +44,8 @@ export function shouldRegenerate(
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
     return false;
   }
-  return radarDeviceKey(oldHass) !== radarDeviceKey(newHass);
+  const cfg = config ?? {};
+  return radarDeviceKey(oldHass, cfg) !== radarDeviceKey(newHass, cfg);
 }
 
 const EMPTY_VIEW = {

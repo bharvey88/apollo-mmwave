@@ -1,5 +1,5 @@
 // Keep in sync with custom_components/apollo_mmwave/manifest.json.
-export const CARD_VERSION = "1.2.3";
+export const CARD_VERSION = "1.3.0";
 
 import "./cards/distance-card";
 import "./cards/gate-energy-card";

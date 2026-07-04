@@ -21,10 +21,12 @@
                 "title": "Apollo mmWave options",
                 "description": "Configure dashboard behavior.",
                 "data": {
-                    "auto_create_view": "Auto-create the Apollo mmWave dashboard"
+                    "auto_create_view": "Auto-create the Apollo mmWave dashboard",
+                    "dashboard_devices": "Dashboard devices"
                 },
                 "data_description": {
-                    "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Takes effect immediately. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually."
+                    "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Takes effect immediately. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually.",
+                    "dashboard_devices": "Leave empty to detect Apollo mmWave devices automatically (online devices only). Select devices to show exactly those on the dashboard — including ones that are currently offline or unplugged."
                 }
             }
         }

@@ -63,6 +63,18 @@ export function ld2450PairsFromDevice(
   return pairs;
 }
 
+/** Every LD2450 target coordinate entity of a device, paired or not (a lone
+ *  X with its Y disabled still counts as radar evidence). */
+export function ld2450EntityIds(hass: HomeAssistant, deviceId: string): string[] {
+  const ids: string[] = [];
+  for (const [id, e] of Object.entries(hass.entities)) {
+    if (e.device_id !== deviceId || !id.startsWith("sensor.")) continue;
+    const oid = id.slice(id.indexOf(".") + 1);
+    if (TARGET_X.test(oid) || TARGET_Y.test(oid)) ids.push(id);
+  }
+  return ids;
+}
+
 /** True when the device's registered entities include LD2450 target sensors.
  *  Only the X sensor is required — Y may be individually disabled. */
 export function hasLd2450Device(hass: HomeAssistant, deviceId: string): boolean {

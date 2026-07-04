@@ -1470,6 +1470,16 @@ function ld2450TargetPairs(base) {
   }));
 }
 const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
+const TARGET_Y = /_ld2450_target_(\d+)_y(?:_\d+)?$/;
+function ld2450EntityIds(hass, deviceId) {
+  const ids = [];
+  for (const [id, e2] of Object.entries(hass.entities)) {
+    if (e2.device_id !== deviceId || !id.startsWith("sensor.")) continue;
+    const oid = id.slice(id.indexOf(".") + 1);
+    if (TARGET_X.test(oid) || TARGET_Y.test(oid)) ids.push(id);
+  }
+  return ids;
+}
 function hasLd2450Device(hass, deviceId) {
   for (const [id, e2] of Object.entries(hass.entities)) {
     if (e2.device_id !== deviceId || !id.startsWith("sensor.")) continue;
@@ -1553,15 +1563,43 @@ function historyEntities(m2) {
   push(m2.zone_3_occupancy, "Zone 3");
   return rows;
 }
-function deviceHasEntities(hass, deviceId) {
-  return Object.values(hass.entities).some((e2) => e2.device_id === deviceId);
+function isLive(hass, entityId) {
+  if (!entityId) return false;
+  const state = hass.states[entityId];
+  return state !== void 0 && state.state !== "unavailable";
+}
+function hasLiveRadarEvidence(hass, deviceId, registryMatched) {
+  const m2 = entityMapFromDevice(hass, deviceId);
+  const radarIds = [];
+  if (m2) {
+    radarIds.push(
+      m2.engineering_mode,
+      m2.radar_timeout,
+      m2.max_move_distance,
+      m2.max_still_distance,
+      m2.radar_target,
+      m2.moving_target,
+      m2.still_target,
+      m2.detection_distance,
+      ...m2.move_threshold,
+      ...m2.still_threshold,
+      ...m2.move_energy,
+      ...m2.still_energy
+    );
+  }
+  radarIds.push(...ld2450EntityIds(hass, deviceId));
+  if (radarIds.some((id) => isLive(hass, id))) return true;
+  if (radarIds.some((id) => id !== void 0)) return false;
+  return registryMatched && Object.entries(hass.entities).some(
+    ([id, e2]) => e2.device_id === deviceId && isLive(hass, id)
+  );
 }
 function deviceFromId(hass, deviceId) {
   const d2 = hass.devices[deviceId];
   const reg = apolloModelInfo(d2);
-  if (reg && !deviceHasEntities(hass, deviceId)) return void 0;
   const base = baseNameFromDevice(hass, deviceId);
   if (!reg && !base) return void 0;
+  if (!hasLiveRadarEvidence(hass, deviceId, !!reg)) return void 0;
   const profile = detectProfileFromEntities(hass, deviceId) ?? (reg == null ? void 0 : reg.profile);
   const ld2450 = hasLd2450Device(hass, deviceId) || (base ? hasLd2450(hass, base) : false) || ((reg == null ? void 0 : reg.ld2450) ?? false);
   if (!profile && !ld2450) return void 0;
@@ -1809,7 +1847,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.2.2";
+const CARD_VERSION = "1.2.3";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

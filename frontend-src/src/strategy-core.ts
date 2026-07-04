@@ -4,6 +4,7 @@ import {
   detectProfileFromEntities,
   entityMapFromDevice,
 } from "./entities";
+import { ld2450EntityIds } from "./ld2450";
 import { apolloModelInfo, type RadarProfile } from "./profiles";
 import { hasLd2450, hasLd2450Device, zoneMapperCard } from "./ld2450";
 import {
@@ -34,8 +35,58 @@ export interface StrategyConfig {
   distance_unit?: string;
 }
 
-function deviceHasEntities(hass: HomeAssistant, deviceId: string): boolean {
-  return Object.values(hass.entities).some((e) => e.device_id === deviceId);
+function isLive(hass: HomeAssistant, entityId: string | undefined): boolean {
+  if (!entityId) return false;
+  const state = hass.states[entityId];
+  return state !== undefined && state.state !== "unavailable";
+}
+
+/**
+ * A device earns a tab only with LIVE radar evidence.
+ *
+ * The device registry keeps entries for hardware that was reflashed or
+ * re-added under a new name; those ghosts still carry an Apollo
+ * manufacturer/model and stale registered entities (every state missing or
+ * "unavailable" forever), so registry + registered-entity checks alone put
+ * dead devices on the dashboard. Require at least one recognized radar entity
+ * with a real state — or, for a registry-matched device whose entities were
+ * renamed beyond recognition, any live entity at all.
+ */
+function hasLiveRadarEvidence(
+  hass: HomeAssistant,
+  deviceId: string,
+  registryMatched: boolean
+): boolean {
+  const m = entityMapFromDevice(hass, deviceId);
+  const radarIds: (string | undefined)[] = [];
+  if (m) {
+    radarIds.push(
+      m.engineering_mode,
+      m.radar_timeout,
+      m.max_move_distance,
+      m.max_still_distance,
+      m.radar_target,
+      m.moving_target,
+      m.still_target,
+      m.detection_distance,
+      ...m.move_threshold,
+      ...m.still_threshold,
+      ...m.move_energy,
+      ...m.still_energy
+    );
+  }
+  radarIds.push(...ld2450EntityIds(hass, deviceId));
+  if (radarIds.some((id) => isLive(hass, id))) return true;
+  if (radarIds.some((id) => id !== undefined)) return false;
+
+  // No recognizable radar entities: only a registry match keeps the device
+  // (renamed-beyond-recognition case), and only while something is alive.
+  return (
+    registryMatched &&
+    Object.entries(hass.entities).some(
+      ([id, e]) => e.device_id === deviceId && isLive(hass, id)
+    )
+  );
 }
 
 function deviceFromId(
@@ -45,12 +96,13 @@ function deviceFromId(
   const d = hass.devices[deviceId];
   // Registry-first: manufacturer/model survive entity renames and `_2` dedup.
   const reg = apolloModelInfo(d);
-  // A registry match with zero registered entities is a freshly added device
-  // mid-race (registry event lands before its entities) — skip it so the
-  // later entities update still counts as a device-set change and regenerates.
-  if (reg && !deviceHasEntities(hass, deviceId)) return undefined;
   const base = baseNameFromDevice(hass, deviceId);
   if (!reg && !base) return undefined;
+
+  // Ghost/offline filter — also covers the freshly-added-device race (its
+  // entities/states aren't in yet): the later entities-registry update still
+  // counts as a device-set change and triggers a regeneration.
+  if (!hasLiveRadarEvidence(hass, deviceId, !!reg)) return undefined;
 
   // Entities win over the registry model when they give a concrete chip match
   // (DIY/reflashed hardware); the registry decides when probing is blind

@@ -97,9 +97,21 @@ class ApolloMmwaveOptionsFlow(config_entries.OptionsFlow):
                 ): selector.DeviceSelector(
                     selector.DeviceSelectorConfig(
                         multiple=True,
+                        # Entries OR together: only Apollo's mmWave-capable
+                        # models, not every ApolloAutomation device (AIR-1,
+                        # TEMP-1, …). Model strings come from the ESPHome
+                        # project name (`ApolloAutomation.<MODEL>`); extend
+                        # when new mmWave hardware ships.
                         filter=[
                             selector.DeviceFilterSelectorConfig(
-                                manufacturer="ApolloAutomation"
+                                manufacturer="ApolloAutomation", model=model
+                            )
+                            for model in (
+                                "MSR-1",
+                                "MSR-2",
+                                "MTR-1",
+                                "R-PRO-1-W",
+                                "R-PRO-1-ETH",
                             )
                         ],
                     )

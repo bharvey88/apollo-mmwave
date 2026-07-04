@@ -1864,7 +1864,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.3.1";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

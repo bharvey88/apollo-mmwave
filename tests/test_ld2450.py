@@ -71,56 +71,21 @@ async def test_resolve_target_pairs_skips_unpaired_and_tolerates_dedup_suffix(
     ]
 
 
-async def test_resolve_target_pairs_ignores_other_devices_and_domains(
+async def test_resolve_target_pairs_ignores_other_devices(
     hass, entity_registry, device_registry
 ) -> None:
-    """Only sensors on the asked-for device count."""
+    """A second radar in the house does not leak into the first one's pairs."""
     device = _make_radar(hass, device_registry, "Kitchen")
     other = _make_radar(hass, device_registry, "Office")
-    entity_registry.async_get_or_create(
-        "sensor",
-        "esphome",
-        "k1x",
-        device_id=device.id,
-        suggested_object_id="kitchen_ld2450_target_1_x",
-    )
-    entity_registry.async_get_or_create(
-        "sensor",
-        "esphome",
-        "k1y",
-        device_id=device.id,
-        suggested_object_id="kitchen_ld2450_target_1_y",
-    )
-    # A number entity named like a target sensor must not be paired: the card
-    # reads states from the sensor domain only.
-    entity_registry.async_get_or_create(
-        "number",
-        "esphome",
-        "k2x",
-        device_id=device.id,
-        suggested_object_id="kitchen_ld2450_target_2_x",
-    )
-    entity_registry.async_get_or_create(
-        "number",
-        "esphome",
-        "k2y",
-        device_id=device.id,
-        suggested_object_id="kitchen_ld2450_target_2_y",
-    )
-    entity_registry.async_get_or_create(
-        "sensor",
-        "esphome",
-        "o1x",
-        device_id=other.id,
-        suggested_object_id="office_ld2450_target_1_x",
-    )
-    entity_registry.async_get_or_create(
-        "sensor",
-        "esphome",
-        "o1y",
-        device_id=other.id,
-        suggested_object_id="office_ld2450_target_1_y",
-    )
+    for base, owner in (("kitchen", device), ("office", other)):
+        for axis in ("x", "y"):
+            entity_registry.async_get_or_create(
+                "sensor",
+                "esphome",
+                f"{base}1{axis}",
+                device_id=owner.id,
+                suggested_object_id=f"{base}_ld2450_target_1_{axis}",
+            )
 
     assert resolve_target_pairs(hass, device.id) == [
         {
@@ -128,6 +93,23 @@ async def test_resolve_target_pairs_ignores_other_devices_and_domains(
             "y": "sensor.kitchen_ld2450_target_1_y",
         }
     ]
+
+
+async def test_resolve_target_pairs_ignores_non_sensor_domains(
+    hass, entity_registry, device_registry
+) -> None:
+    """A number entity named like a target sensor is not a coordinate source."""
+    device = _make_radar(hass, device_registry, "Kitchen")
+    for axis in ("x", "y"):
+        entity_registry.async_get_or_create(
+            "number",
+            "esphome",
+            f"k2{axis}",
+            device_id=device.id,
+            suggested_object_id=f"kitchen_ld2450_target_2_{axis}",
+        )
+
+    assert resolve_target_pairs(hass, device.id) == []
 
 
 async def test_resolve_target_pairs_skips_disabled_entities(

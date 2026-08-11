@@ -11,9 +11,16 @@ prefix does not break detection, and the optional trailing ``_2`` absorbs Home
 Assistant's dedup suffix. The target number sits before those dedup digits, so
 it cannot be misread as one.
 
-This is the Python twin of ``frontend-src/src/ld2450.ts``. The two patterns and
+This is the Python twin of ``frontend-src/src/ld2450.ts``. The two regexes and
 the pairing rule (an X is only offered with the Y of the same target number)
-have to stay in sync, so change both together.
+are shared, so change both together.
+
+One difference is deliberate: this side drops disabled entities, the TypeScript
+does not. It cannot. It reads ``hass.entities``, which carries no reliable
+disabled signal, while this reads the entity registry, which does. So a target
+whose Y is disabled yields a pair there and nothing here. Do not "fix" that by
+loosening this side. From Task 6 on, the backend is the authoritative source of
+suggested pairs and the stricter answer is the correct one.
 """
 
 from __future__ import annotations

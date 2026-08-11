@@ -1,24 +1,29 @@
 """
-One-time migration from the legacy (pre-1.2.0) persistence model.
+One-time migrations run at setup, before any platform is forwarded.
 
-Legacy model: zone data lived in ``hass.data`` and survived restarts only via
-the coordinate sensor's RestoreEntity attributes; the set of zones was
-re-derived at boot by parsing entity friendly names. 1.2.0 moves the source of
-truth into ``ZoneStore`` (``.storage/apollo_mmwave.zones``).
+``async_migrate_legacy`` covers the pre-1.2.0 persistence model, where zone
+data lived in ``hass.data`` and survived restarts only via the coordinate
+sensor's RestoreEntity attributes, with the set of zones re-derived at boot by
+parsing entity friendly names. 1.2.0 moved the source of truth into
+``ZoneStore`` (``.storage/apollo_mmwave.zones``). It runs only when no store
+file exists yet.
 
-This module runs only when no store file exists yet: it rebuilds each
-location's zones/entities/rotation from the entity registry plus the
-restore-state cache of the old coordinate sensors.
+``async_migrate_unique_ids`` covers the 2.0 identity change: zone entities are
+keyed by Home Assistant device id now instead of a slug of the radar's display
+name. It runs on every setup and is a no-op once there is nothing left in the
+old format.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import restore_state
+from homeassistant.util import slugify
 
 from .const import (
     ATTR_DATA,
@@ -27,8 +32,10 @@ from .const import (
     ATTR_SHAPE,
     DOMAIN,
     STORE_ENTITIES,
+    STORE_LABEL,
     STORE_ZONES,
 )
+from .store import _resolve_device_id
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -94,10 +101,41 @@ def _normalize_entity_pairs(pairs: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def _legacy_target(
+    hass: HomeAssistant,
+    store: ZoneStore,
+    location: str,
+    entities: Any,
+    warned: set[str],
+) -> dict[str, Any]:
+    """Return the store entry a legacy location belongs in."""
+    # The store is keyed by device id, so legacy data has to be resolved the same
+    # way v1 store data is: by the coordinate entities it tracked, then by name.
+    # What resolves to nothing goes to orphans rather than being dropped, so a
+    # user who renamed their radar keeps their drawn zones.
+    device_id = _resolve_device_id(hass, location, entities)
+    if device_id is not None:
+        target = store.device(device_id)
+    else:
+        if location not in warned:
+            warned.add(location)
+            _LOGGER.warning(
+                "Apollo mmWave: legacy zone location '%s' matches no Home"
+                " Assistant device; its zones were kept but are not shown until"
+                " you re-draw them on the device's card.",
+                location,
+            )
+        target = store.orphans.setdefault(location, {STORE_ZONES: {}})
+    target.setdefault(STORE_LABEL, location)
+    return target
+
+
 async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
     """Populate an empty store from legacy restore states, then persist it."""
     registry = er.async_get(hass)
     migrated_zones = 0
+    # One warning per location, not one per zone entity on it.
+    warned: set[str] = set()
 
     for entry in list(registry.entities.values()):
         if entry.platform != DOMAIN:
@@ -112,11 +150,9 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
             continue
         slug, zone_id = parsed
         location = _derive_location_name(entry, slug)
-        # The store is keyed by device id and this legacy data only knows a
-        # display name, so it goes to orphans, the same place the v1 store
-        # migration puts locations it cannot resolve. Nothing here resolves a
-        # device yet; that arrives with the rewrite of this module.
-        loc = store.orphans.setdefault(location, {STORE_ZONES: {}})
+        loc = _legacy_target(
+            hass, store, location, attributes.get(STORE_ENTITIES), warned
+        )
         shape = attributes.get(ATTR_SHAPE)
         if shape is not None:
             zone_def: dict[str, Any] = {
@@ -147,3 +183,58 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
             migrated_zones,
         )
     await store.async_save()
+
+
+_OLD_UID = re.compile(
+    rf"^{DOMAIN}_(?P<slug>.+)_zone_(?P<zone>\d+)(?P<presence>_presence)?$"
+)
+
+
+async def async_migrate_unique_ids(hass: HomeAssistant, store: ZoneStore) -> None:
+    """
+    Point pre-2.0 zone entities at their device-id unique ids.
+
+    Entity ids are deliberately left alone: they are no longer derived from
+    anything, and rewriting them would break the very automations this
+    migration exists to keep working. Only the unique id changes, so the
+    platform adopts the user's existing entity along with its name, area, and
+    every reference to it.
+    """
+    registry = er.async_get(hass)
+    # The v1 store keyed everything by display name and the old unique ids were
+    # built from a slug of it, so `label` is the only bridge back to a device.
+    slug_to_device = {
+        slugify(entry[STORE_LABEL]): device_id
+        for device_id, entry in store.devices.items()
+        if isinstance(entry.get(STORE_LABEL), str)
+    }
+    if not slug_to_device:
+        return
+
+    for entity in list(registry.entities.values()):
+        if entity.platform != DOMAIN:
+            continue
+        match = _OLD_UID.match(entity.unique_id or "")
+        if not match:
+            continue
+        device_id = slug_to_device.get(match["slug"])
+        if device_id is None:
+            continue
+        suffix = "_presence" if match["presence"] else ""
+        new_uid = f"{device_id}_zone_{match['zone']}{suffix}"
+        occupant = registry.async_get_entity_id(entity.domain, DOMAIN, new_uid)
+        if occupant is not None:
+            # Two entities cannot share a unique id, and the occupant is the one
+            # the platform is already driving. Renaming onto it would raise, and
+            # removing either side would throw away a user's entity, so the old
+            # one is left in place and named so the user can delete it.
+            _LOGGER.warning(
+                "Apollo mmWave: %s could not be migrated to unique id %s because"
+                " %s already uses it; %s is stale and can be deleted.",
+                entity.entity_id,
+                new_uid,
+                occupant,
+                entity.entity_id,
+            )
+            continue
+        registry.async_update_entity(entity.entity_id, new_unique_id=new_uid)

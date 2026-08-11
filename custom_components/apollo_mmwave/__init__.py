@@ -406,13 +406,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     must work even when the auto-dashboard is turned off (users laying out the
     cards themselves). Only the sidebar dashboard is gated by the option.
     """
+    from .migration import (  # noqa: PLC0415
+        async_migrate_legacy,
+        async_migrate_unique_ids,
+    )
     from .store import ZoneStore  # noqa: PLC0415
 
     store = ZoneStore(hass)
     if not await store.async_load():
-        from .migration import async_migrate_legacy  # noqa: PLC0415
-
         await async_migrate_legacy(hass, store)
+    # Before the platforms: an entity still on a pre-2.0 unique id would
+    # otherwise be abandoned and recreated fresh, losing its name and area.
+    await async_migrate_unique_ids(hass, store)
     hass.data.setdefault(DOMAIN, {})[DATA_STORE] = store
 
     # Before the platforms, so no entity can resolve pairs without the cache in

@@ -11,7 +11,9 @@ element with no way to recover short of a hard refresh.
 from __future__ import annotations
 
 import pytest
+from homeassistant.components.frontend import DATA_PANELS
 from homeassistant.components.lovelace.const import LOVELACE_DATA, ConfigNotFound
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.apollo_mmwave.const import (
@@ -23,6 +25,7 @@ from custom_components.apollo_mmwave.const import (
     DOMAIN,
 )
 from custom_components.apollo_mmwave.frontend import (
+    _dashboards_collection,
     async_register_dashboard,
     async_register_frontend_assets,
     async_remove_dashboard,
@@ -114,6 +117,10 @@ async def test_dashboard_appears_with_a_title_and_can_be_taken_over(
     ours = next(r for r in rows if r["url_path"] == DASHBOARD_URL_PATH)
     assert ours["title"] == DASHBOARD_TITLE
 
+    # 1.3.1 shipped with no panel at all: the dashboards list reads a different
+    # dict, so it alone would not have caught that.
+    assert DASHBOARD_URL_PATH in hass.data[DATA_PANELS]
+
     stored = await _dashboard_config(hass)
     assert stored["strategy"]["type"] == DASHBOARD_STRATEGY_TYPE
 
@@ -128,7 +135,7 @@ async def test_dashboard_appears_with_a_title_and_can_be_taken_over(
 
 
 async def test_removing_the_entry_removes_the_dashboard(hass, dashboard_entry) -> None:
-    """Deleting the config entry takes the collection item with it."""
+    """Deleting the config entry takes the collection item and panel with it."""
     await setup_integration(hass, dashboard_entry)
     assert DASHBOARD_URL_PATH in hass.data[LOVELACE_DATA].dashboards
 
@@ -136,6 +143,59 @@ async def test_removing_the_entry_removes_the_dashboard(hass, dashboard_entry) -
     await hass.async_block_till_done()
 
     assert DASHBOARD_URL_PATH not in hass.data[LOVELACE_DATA].dashboards
+    assert DASHBOARD_URL_PATH not in hass.data[DATA_PANELS]
+
+
+async def test_reloading_the_entry_keeps_the_users_dashboard_edits(
+    hass, dashboard_entry
+) -> None:
+    """A reload must not delete and recreate the row, wiping renames and icons."""
+    await setup_integration(hass, dashboard_entry)
+    collection = _dashboards_collection(hass)
+    item = next(
+        i for i in collection.async_items() if i["url_path"] == DASHBOARD_URL_PATH
+    )
+    await collection.async_update_item(
+        item["id"], {"title": "Radar", "icon": "mdi:home", "show_in_sidebar": False}
+    )
+
+    await hass.config_entries.async_reload(dashboard_entry.entry_id)
+    await hass.async_block_till_done()
+
+    item = next(
+        i for i in collection.async_items() if i["url_path"] == DASHBOARD_URL_PATH
+    )
+    assert item["title"] == "Radar"
+    assert item["icon"] == "mdi:home"
+    assert item["show_in_sidebar"] is False
+
+
+async def test_a_foreign_dashboard_on_our_url_path_is_never_written_to(
+    hass, dashboard_entry
+) -> None:
+    """A user's own dashboard here has no config yet; that is not a free space."""
+    dashboard_entry.add_to_hass(hass)
+    # The integration is not up yet, so this row is unmistakably not ours. It
+    # has no stored Lovelace config, exactly like one made in the UI and not
+    # yet opened.
+    assert await async_setup_component(hass, "lovelace", {})
+    collection = _dashboards_collection(hass)
+    await collection.async_create_item(
+        {"url_path": DASHBOARD_URL_PATH, "title": "My Radar Room"}
+    )
+
+    assert await hass.config_entries.async_setup(dashboard_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert await _dashboard_config(hass) is None
+
+    # And turning the option off must not delete what we never created.
+    await async_remove_dashboard(hass)
+    await hass.async_block_till_done()
+    item = next(
+        i for i in collection.async_items() if i["url_path"] == DASHBOARD_URL_PATH
+    )
+    assert item["title"] == "My Radar Room"
 
 
 async def test_taken_over_dashboard_is_never_overwritten_or_deleted(

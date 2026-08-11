@@ -23,10 +23,16 @@ This integration ships its own Lovelace frontend so users install ONE thing:
 
    It is a real collection item rather than a synthetic read-only config so
    that users get the things Home Assistant already builds for storage
-   dashboards: a title on the dashboards settings page, a working "take
-   control", and a delete button. Once someone takes control their config has
-   no ``strategy`` key, which is exactly how we tell "still ours" from "now
-   theirs" and never write over their work.
+   dashboards: a title on the dashboards settings page, and a working "take
+   control" for anyone who wants to customize it. Once someone takes control
+   their config has no ``strategy`` key, which is exactly how we tell "still
+   ours" from "now theirs" and never write over their work.
+
+   The item is created once and then only ever has its *config* refreshed.
+   Title, icon, sidebar visibility and admin-only belong to the user from the
+   moment the row exists, so they are written at creation and never again. The
+   "auto-create dashboard" option is the single source of truth for whether the
+   dashboard exists; nothing else removes it, and a reload leaves it alone.
 
 Lovelace internals (``hass.data[LOVELACE_DATA]`` and the dashboards collection
 behind the ``lovelace/dashboards`` websocket API) are not a public contract, so
@@ -276,16 +282,28 @@ async def async_register_dashboard(
     """
     Create the "Apollo mmWave" dashboard as a normal storage dashboard.
 
-    Reseeds the strategy config when the explicit device selection changed, but
-    never when the user has taken control. Returns True if the dashboard is
-    accounted for, False if the Lovelace environment wasn't ready.
+    Creates the collection item if the "auto-create dashboard" option is on and
+    it is missing, then keeps the strategy config current (the explicit device
+    selection can change). Never touches a dashboard that is not ours. Returns
+    False only if Lovelace's internals could not be reached at all.
     """
     try:
         collection = _dashboards_collection(hass)
         if collection is None:
-            _LOGGER.debug("Apollo mmWave: lovelace dashboards not available yet.")
+            _LOGGER.warning(
+                "Apollo mmWave: could not reach Lovelace's dashboards collection,"
+                " so the '%s' dashboard was not created. You can add a dashboard"
+                " with strategy type '%s' manually.",
+                DASHBOARD_TITLE,
+                DASHBOARD_STRATEGY_TYPE,
+            )
             return False
 
+        # Ownership is decided by who created the row, not by what is stored on
+        # it. A dashboard someone else made has no config until they save one,
+        # and inferring "unowned" from that empty config would let us write our
+        # strategy over their work and then delete it as if it were ours.
+        created = False
         if _dashboard_item(collection) is None:
             if DASHBOARD_URL_PATH in hass.data[LOVELACE_DATA].dashboards:
                 # A YAML dashboard holds the url path. Lovelace refuses a second
@@ -304,12 +322,21 @@ async def async_register_dashboard(
                     CONF_REQUIRE_ADMIN: False,
                 }
             )
+            created = True
+            _LOGGER.info(
+                "Apollo mmWave: created the '%s' dashboard. The 'auto-create"
+                " dashboard' option in the integration's settings is what"
+                " controls it: turn that off to remove it and keep it removed."
+                " You can also hide it from your own sidebar in your profile if"
+                " you would rather lay the cards out yourself.",
+                DASHBOARD_TITLE,
+            )
 
         stored = await _async_stored_config(hass)
-        if stored is not None and not _is_ours(stored):
+        if not created and not _is_ours(stored):
             _LOGGER.debug(
-                "Apollo mmWave: the '%s' dashboard has been taken over; leaving"
-                " its config alone.",
+                "Apollo mmWave: the '%s' dashboard is not ours to write to;"
+                " leaving its config alone.",
                 DASHBOARD_TITLE,
             )
             return True
@@ -331,12 +358,6 @@ async def async_register_dashboard(
         )
         return True
     else:
-        _LOGGER.info(
-            "Apollo mmWave: registered the '%s' dashboard. Hide it from the"
-            " sidebar in your profile if you prefer to lay out the cards"
-            " yourself.",
-            DASHBOARD_TITLE,
-        )
         return True
 
 
@@ -344,11 +365,14 @@ async def async_remove_dashboard(hass: HomeAssistant) -> None:
     """
     Remove the auto-created dashboard.
 
-    Called when the user turns the dashboard option off or unloads the entry.
-    Deleting the collection item is what removes the sidebar panel and the
-    stored config; lovelace does both from its own collection listener. Only a
-    config that is still our generated strategy is deleted, so a dashboard the
-    user built or took control of on this url path is left standing.
+    Called only when the user turns the "auto-create dashboard" option off, or
+    when the config entry is removed. An integration reload deliberately does
+    not come through here: deleting and recreating the item would throw away
+    whatever the user renamed, re-iconed, or hid on the dashboards settings
+    page. Deleting the collection item is what removes the sidebar panel and
+    the stored config; lovelace does both from its own collection listener.
+    Only a config that is still our generated strategy is deleted, so a
+    dashboard the user built or took control of here is left standing.
     """
     try:
         collection = _dashboards_collection(hass)

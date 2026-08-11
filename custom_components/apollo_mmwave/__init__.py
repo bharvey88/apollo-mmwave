@@ -597,13 +597,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload the entry: platforms, service, dashboard; flush the store."""
-    from .frontend import async_remove_dashboard  # noqa: PLC0415
+    """
+    Unload the entry: platforms and service; flush the store.
 
+    The dashboard deliberately survives an unload. It is a real storage
+    dashboard now, so removing it here would delete whatever the user renamed,
+    re-iconed, or hid on the dashboards settings page every time the
+    integration reloaded (which HACS does on every update). The "auto-create
+    dashboard" option owns its lifetime instead.
+    """
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE)
-        await async_remove_dashboard(hass)
         store = hass.data.get(DOMAIN, {}).pop(DATA_STORE, None)
         if store is not None:
             await store.async_save()
@@ -611,8 +616,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Delete the zone store when the integration is removed."""
+    """Delete the dashboard and the zone store when the integration is removed."""
     _ = entry
+    from .frontend import async_remove_dashboard  # noqa: PLC0415
     from .store import ZoneStore  # noqa: PLC0415
 
+    await async_remove_dashboard(hass)
     await ZoneStore(hass).async_remove()

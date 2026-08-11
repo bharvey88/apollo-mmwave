@@ -228,3 +228,39 @@ async def test_v1_locations_colliding_on_one_device_are_merged(
     assert conflict, "expected a warning about the conflicting zone id"
     assert "Apollo R_PRO-1 abc123" in conflict[0]
     assert "2" in conflict[0]
+
+
+async def test_v1_merge_keeps_an_explicit_zero_rotation(
+    hass, hass_storage, device_registry, entity_registry
+) -> None:
+    """0 degrees is a configured value, not an absent one, so it still wins."""
+    device = _make_radar(hass, device_registry, "Apollo R_PRO-1 abc123")
+    entity_registry.async_get_or_create(
+        "sensor",
+        "esphome",
+        "x1",
+        device_id=device.id,
+        suggested_object_id="apollo_r_pro_1_abc123_ld2450_target_1_x",
+    )
+    hass_storage["apollo_mmwave.zones"] = {
+        "version": 1,
+        "data": {
+            "locations": {
+                "Kitchen": {
+                    "zones": {"1": {"shape": "rect", "data": {}}},
+                    "entities": [{"x": TARGET_X, "y": TARGET_Y}],
+                    "rotation_deg": 0,
+                },
+                "Apollo R_PRO-1 abc123": {
+                    "zones": {"2": {"shape": "rect", "data": {}}},
+                    "entities": [],
+                    "rotation_deg": 90,
+                },
+            }
+        },
+    }
+
+    store = ZoneStore(hass)
+    assert await store.async_load() is True
+
+    assert store.devices[device.id]["rotation_deg"] == 0

@@ -127,9 +127,9 @@ def _merge_location(
         target[STORE_ENTITIES] = entities
     target.setdefault(STORE_ENTITIES, [])
     rotation = raw.get(ATTR_ROTATION_DEG)
-    # Falsy counts as unset here: 0 degrees is the default, so a real rotation
-    # from a second location should not lose to it.
-    if rotation and not target.get(ATTR_ROTATION_DEG):
+    # 0 degrees is a configured value, distinct from absent, so this gates on
+    # presence rather than truthiness like the rest of the integration does.
+    if rotation is not None and target.get(ATTR_ROTATION_DEG) is None:
         target[ATTR_ROTATION_DEG] = rotation
     target.setdefault(STORE_LABEL, location)
 

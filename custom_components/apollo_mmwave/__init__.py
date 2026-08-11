@@ -284,6 +284,15 @@ def _device_id_for_label(store: ZoneStore, location: Any) -> str | None:
     return None
 
 
+def _device_is_registered(hass: HomeAssistant, device_id: str) -> bool:
+    """Report whether the id still names a device Home Assistant knows about."""
+    # Every path into `store.device()` goes through this. That call is a
+    # setdefault, so an id no Home Assistant device answers to becomes a phantom
+    # store entry: persisted forever, rendering nothing, reported as vanished
+    # zones.
+    return dr.async_get(hass).async_get(device_id) is not None
+
+
 def _device_id_from_call(hass: HomeAssistant, call: ServiceCall) -> str | None:
     """Read `device_id` off a call, or None if it names no real device."""
     raw = call.data.get("device_id")
@@ -307,9 +316,8 @@ def _device_id_from_call(hass: HomeAssistant, call: ServiceCall) -> str | None:
         return None
     device_id = raw.strip()
     # A stale id from a copied automation, or from a radar that was removed and
-    # re-added, would otherwise be written into the store as a phantom device:
-    # persisted forever, rendering nothing, reported as "my zones vanished".
-    if dr.async_get(hass).async_get(device_id) is None:
+    # re-added, must not reach the store.
+    if not _device_is_registered(hass, device_id):
         _LOGGER.warning(
             "Apollo mmWave: update_zone device id '%s' matches no Home Assistant"
             " device; nothing was changed.",
@@ -338,6 +346,21 @@ def _device_id_for_deprecated_location(
             " nothing was changed.",
             location,
         )
+        return None
+    # Nothing prunes a store entry when its device leaves the device registry,
+    # so a label outlives the radar it named and keeps resolving to a dead id.
+    # Writing through it would rebuild the same phantom entry an unknown
+    # device_id does, just by the other door.
+    if not _device_is_registered(hass, resolved):
+        _LOGGER.warning(
+            "Apollo mmWave: the radar behind update_zone location '%s' (device"
+            " %s) is no longer in Home Assistant, so nothing was changed. If you"
+            " re-added it, re-draw its zones and switch the automation to"
+            " device_id.",
+            location,
+            resolved,
+        )
+        return None
     return resolved
 
 

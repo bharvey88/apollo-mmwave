@@ -342,6 +342,27 @@ async def test_location_deprecation_is_warned_about_once(
     assert get_store(hass).device(device_id)[ATTR_ROTATION_DEG] == 30
 
 
+async def test_location_for_a_removed_radar_writes_nothing(
+    hass, init_integration, device_id, device_registry
+) -> None:
+    """Nothing prunes the store, so a label can outlive the radar it named."""
+    _ = init_integration
+    store = get_store(hass)
+    store.device(device_id)[STORE_LABEL] = "Office"
+    device_registry.async_remove_device(device_id)
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"location": "Office", ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert store.devices.get(device_id, {}).get(ATTR_ROTATION_DEG) is None
+
+
 async def test_update_zone_requires_a_target(hass, init_integration) -> None:
     """Neither `device_id` nor `location`: the schema rejects the call."""
     _ = init_integration

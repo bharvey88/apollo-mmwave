@@ -89,6 +89,51 @@ def _resolve_device_id(hass: HomeAssistant, location: str, entities: Any) -> str
     return None
 
 
+def _merge_location(
+    target: dict[str, Any],
+    raw: dict[str, Any],
+    location: str,
+    zone_sources: dict[str, str],
+) -> None:
+    """
+    Fold one v1 location into a device entry, first writer wins.
+
+    Two v1 locations can resolve to the same device: renaming a device mid-life
+    left the old name behind as a second entry. A plain dict update would let
+    the second entry silently wipe the first one's zones, and this migration
+    runs once with no undo, so every zone id is kept and only true id-level
+    conflicts are dropped (loudly).
+    """
+    zones = target.setdefault(STORE_ZONES, {})
+    incoming = raw.get(STORE_ZONES)
+    if isinstance(incoming, dict):
+        for raw_key, zone_def in incoming.items():
+            zone_key = str(raw_key)
+            if zone_key in zones:
+                _LOGGER.warning(
+                    "Apollo mmWave: zone %s is defined by both '%s' and '%s',"
+                    " which migrated to the same device; keeping the definition"
+                    " from '%s'.",
+                    zone_key,
+                    zone_sources.get(zone_key, location),
+                    location,
+                    zone_sources.get(zone_key, location),
+                )
+                continue
+            zones[zone_key] = zone_def
+            zone_sources[zone_key] = location
+    entities = raw.get(STORE_ENTITIES)
+    if entities and not target.get(STORE_ENTITIES):
+        target[STORE_ENTITIES] = entities
+    target.setdefault(STORE_ENTITIES, [])
+    rotation = raw.get(ATTR_ROTATION_DEG)
+    # Falsy counts as unset here: 0 degrees is the default, so a real rotation
+    # from a second location should not lose to it.
+    if rotation and not target.get(ATTR_ROTATION_DEG):
+        target[ATTR_ROTATION_DEG] = rotation
+    target.setdefault(STORE_LABEL, location)
+
+
 class _MigratingStore(Store[dict[str, Any]]):
     """Store subclass that rekeys v1 (display name) data to device ids."""
 
@@ -102,19 +147,23 @@ class _MigratingStore(Store[dict[str, Any]]):
             return old_data
         devices: dict[str, Any] = {}
         orphans: dict[str, Any] = {}
+        # Which location contributed each zone id, per device, so a collision
+        # warning can name both sides of it.
+        sources: dict[str, dict[str, str]] = {}
         for location, raw in (old_data.get("locations") or {}).items():
             if not isinstance(raw, dict):
                 continue
             device_id = _resolve_device_id(self.hass, location, raw.get(STORE_ENTITIES))
-            target = (
-                devices.setdefault(device_id, {})
-                if device_id
-                else orphans.setdefault(location, {})
-            )
-            target.update(raw)
             if device_id:
-                target[STORE_LABEL] = location
+                _merge_location(
+                    devices.setdefault(device_id, {}),
+                    raw,
+                    location,
+                    sources.setdefault(device_id, {}),
+                )
             else:
+                # Orphans are still keyed by location, so they cannot collide.
+                _merge_location(orphans.setdefault(location, {}), raw, location, {})
                 _LOGGER.warning(
                     "Apollo mmWave: zone location '%s' matches no Home Assistant"
                     " device; its zones were kept but are not shown until you"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+import voluptuous as vol
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.apollo_mmwave import get_store
@@ -12,6 +14,7 @@ from custom_components.apollo_mmwave.const import (
     SERVICE_UPDATE_ZONE,
     STORE_DEVICES,
     STORE_ENTITIES,
+    STORE_LABEL,
     STORE_ORPHANS,
     STORE_ZONES,
 )
@@ -29,8 +32,7 @@ async def _create_rect_zone(hass, device_id: str) -> None:
         DOMAIN,
         SERVICE_UPDATE_ZONE,
         {
-            # Still spelled `location`; the value is a device id now.
-            "location": device_id,
+            "device_id": device_id,
             "zone_id": 1,
             "shape": "rect",
             "data": {"x_min": -1000, "x_max": 1000, "y_min": 0, "y_max": 2000},
@@ -84,7 +86,7 @@ async def test_rotation_only_update_is_stored(
     await hass.services.async_call(
         DOMAIN,
         SERVICE_UPDATE_ZONE,
-        {"location": device_id, ATTR_ROTATION_DEG: 90},
+        {"device_id": device_id, ATTR_ROTATION_DEG: 90},
         blocking=True,
     )
     await hass.async_block_till_done()
@@ -104,7 +106,7 @@ async def test_delete_zone_removes_entities_and_store(
     await hass.services.async_call(
         DOMAIN,
         SERVICE_UPDATE_ZONE,
-        {"location": device_id, "zone_id": 1, "delete": True},
+        {"device_id": device_id, "zone_id": 1, "delete": True},
         blocking=True,
     )
     await hass.async_block_till_done()
@@ -120,7 +122,7 @@ async def test_zone_recreated_after_delete(hass, init_integration, device_id) ->
     await hass.services.async_call(
         DOMAIN,
         SERVICE_UPDATE_ZONE,
-        {"location": device_id, "zone_id": 1, "delete": True},
+        {"device_id": device_id, "zone_id": 1, "delete": True},
         blocking=True,
     )
     await hass.async_block_till_done()
@@ -177,6 +179,113 @@ async def test_zones_reload_from_storage(
     )
     assert sensor_id is not None
     assert hass.states.get(sensor_id).attributes["shape"] == "rect"
+
+
+async def test_empty_entities_list_does_not_wipe_saved_pairs(
+    hass, init_integration, device_id
+) -> None:
+    """A zone edit from a card that has not loaded its pairs must not erase them."""
+    _ = init_integration
+    await _create_rect_zone(hass, device_id)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {
+            "device_id": device_id,
+            "zone_id": 1,
+            "shape": "rect",
+            "data": {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10},
+            "entities": [],
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_store(hass).device(device_id)[STORE_ENTITIES] == TRACKED
+
+
+async def test_clear_entities_flag_explicitly_empties_the_list(
+    hass, init_integration, device_id
+) -> None:
+    """`clear_entities` is the only way to write an explicit empty list."""
+    _ = init_integration
+    await _create_rect_zone(hass, device_id)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, "clear_entities": True},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_store(hass).device(device_id)[STORE_ENTITIES] == []
+
+
+async def test_call_without_entities_never_seeds_the_key(
+    hass, init_integration, device_id
+) -> None:
+    """Absent must stay absent, or the LD2450 presence fallback switches off."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert STORE_ENTITIES not in get_store(hass).device(device_id)
+
+
+async def test_deprecated_location_resolves_through_the_stored_label(
+    hass, init_integration, device_id
+) -> None:
+    """Automations written against the v1 `location` field keep working."""
+    _ = init_integration
+    get_store(hass).device(device_id)[STORE_LABEL] = "Apollo R_PRO-1 abc123"
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"location": "apollo r_pro-1 abc123", ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_store(hass).device(device_id)[ATTR_ROTATION_DEG] == 90
+
+
+async def test_unresolvable_location_writes_nothing(
+    hass, init_integration, device_id
+) -> None:
+    """An unknown label must not invent a device entry the store never had."""
+    _ = init_integration
+    store = get_store(hass)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"location": "Some Room That Never Existed", ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert "Some Room That Never Existed" not in store.devices
+    assert store.devices.get(device_id, {}).get(ATTR_ROTATION_DEG) is None
+
+
+async def test_update_zone_requires_a_target(hass, init_integration) -> None:
+    """Neither `device_id` nor `location`: the schema rejects the call."""
+    _ = init_integration
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_UPDATE_ZONE,
+            {ATTR_ROTATION_DEG: 90},
+            blocking=True,
+        )
 
 
 async def test_unload_removes_service(hass, init_integration) -> None:

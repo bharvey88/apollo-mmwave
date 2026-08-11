@@ -10,6 +10,7 @@ from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import slugify
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -49,6 +50,7 @@ from .const import (
     SHAPE_RECT,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
+    STORE_LABEL,
     STORE_ZONES,
     SUPPORTED_SHAPES,
     WARN_ELLIPSE_INVALID,
@@ -103,9 +105,15 @@ def _coerce_zone_name(name: Any) -> str | None:
 
 
 def _normalize_entities(entities: Any) -> list[dict[str, str]] | None:
-    if entities is None:
-        return None
-    if not isinstance(entities, list):
+    """
+    Normalize a pairs list. An EMPTY list means "no change", not "erase".
+
+    Cards send their whole in-memory pair list on every zone edit, and a card
+    that has not finished loading sends an empty one. Treating that as an erase
+    destroyed real user configuration (two reported cases). Emptying the list is
+    only ever done through `clear_entities: true`, which is explicit.
+    """
+    if not isinstance(entities, list) or not entities:
         return None
     normalized: list[dict[str, str]] = []
     for pair in entities:
@@ -115,7 +123,8 @@ def _normalize_entities(entities: Any) -> list[dict[str, str]] | None:
         y_id = pair.get("y")
         if isinstance(x_id, str) and isinstance(y_id, str):
             normalized.append({"x": x_id, "y": y_id})
-    return normalized
+    # Same rule once validation is done: nothing left is still not an erase.
+    return normalized or None
 
 
 def _normalize_zone_payload(
@@ -255,38 +264,80 @@ def _notify_zones_updated(hass: HomeAssistant, device_id: str) -> None:
     hass.bus.async_fire(EVENT_ZONE_UPDATED, {"device_id": device_id})
 
 
+def _device_id_for_label(store: ZoneStore, location: Any) -> str | None:
+    """Resolve a deprecated `location` value against the stored device labels."""
+    # Matching is slug-based so a v1 automation still hits its device however the
+    # name was capitalized or punctuated. Only stored labels are consulted: the
+    # service must not invent a target the store has never heard of.
+    if not isinstance(location, str) or not location.strip():
+        return None
+    wanted = slugify(location)
+    for device_id, entry in store.devices.items():
+        label = entry.get(STORE_LABEL)
+        if isinstance(label, str) and slugify(label) == wanted:
+            return device_id
+    return None
+
+
+def _resolve_target_device(store: ZoneStore, call: ServiceCall) -> str | None:
+    """Return the device id a call targets, or None if it names no known radar."""
+    device_id = call.data.get("device_id")
+    if isinstance(device_id, str) and device_id.strip():
+        return device_id.strip()
+
+    location = call.data.get("location")
+    if location is None:
+        _LOGGER.warning(
+            "Apollo mmWave: update_zone needs a device_id; nothing was changed."
+        )
+        return None
+
+    _LOGGER.warning(
+        "Apollo mmWave: the update_zone 'location' field is deprecated and will"
+        " be removed in a future release; pass 'device_id' instead."
+    )
+    resolved = _device_id_for_label(store, location)
+    if resolved is None:
+        _LOGGER.warning(
+            "Apollo mmWave: update_zone location '%s' matches no known radar;"
+            " nothing was changed.",
+            location,
+        )
+    return resolved
+
+
+def _apply_entity_pairs(device: dict[str, Any], call: ServiceCall) -> None:
+    """Write the tracked pair list, but only when the call really asks for it."""
+    if call.data.get("clear_entities"):
+        device[STORE_ENTITIES] = []
+        return
+    entities = _normalize_entities(call.data.get("entities"))
+    if entities is not None:
+        device[STORE_ENTITIES] = entities
+
+
 def _build_update_zone_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
     async def handle_update_zone(call: ServiceCall) -> None:
-        # The service field is still called `location`, but the store is keyed
-        # by device id now, so that is what it has to carry. The field itself is
-        # renamed when the service is reworked.
-        location_raw = call.data.get("location")
-        if not isinstance(location_raw, str) or not location_raw.strip():
-            _LOGGER.debug(
-                "Apollo mmWave: rejected update with invalid device id: %s",
-                location_raw,
-            )
+        store = get_store(hass)
+        device_id = _resolve_target_device(store, call)
+        if device_id is None:
             return
 
-        device_id = location_raw.strip()
         zone_id = call.data.get("zone_id")
         shape = call.data.get("shape")
         data = call.data.get("data")
-        entities = _normalize_entities(call.data.get("entities"))
         rotation = _sanitize_rotation(call.data.get(ATTR_ROTATION_DEG))
         zone_name = _coerce_zone_name(call.data.get("name"))
         delete_zone = bool(call.data.get("delete"))
 
-        store = get_store(hass)
         device = store.device(device_id)
 
         if rotation is not None:
             device[ATTR_ROTATION_DEG] = rotation
 
-        if entities is not None:
-            device[STORE_ENTITIES] = entities
+        _apply_entity_pairs(device, call)
 
         if delete_zone and zone_id is not None:
             device[STORE_ZONES].pop(zone_id, None)
@@ -334,28 +385,36 @@ def _build_update_zone_handler(
     return handle_update_zone
 
 
-UPDATE_ZONE_SERVICE_SCHEMA = vol.Schema(
-    {
-        vol.Required("location"): cv.string,
-        vol.Optional("zone_id"): cv.positive_int,
-        vol.Optional("shape"): vol.In(list(SUPPORTED_SHAPES)),
-        vol.Optional("data"): vol.Any(None, dict),
-        vol.Optional(ATTR_ROTATION_DEG): vol.Coerce(float),
-        vol.Optional("name"): cv.string,
-        vol.Optional("delete"): cv.boolean,
-        vol.Optional("entities"): vol.All(
-            cv.ensure_list,
-            [
-                vol.Schema(
-                    {
-                        vol.Required("x"): cv.entity_id,
-                        vol.Required("y"): cv.entity_id,
-                    },
-                    extra=vol.ALLOW_EXTRA,
-                )
-            ],
-        ),
-    }
+UPDATE_ZONE_SERVICE_SCHEMA = vol.All(
+    # `location` is the v1 spelling, kept for one release so existing automations
+    # keep working. Exactly one of the two has to be there.
+    cv.has_at_least_one_key("device_id", "location"),
+    vol.Schema(
+        {
+            vol.Optional("device_id"): cv.string,
+            vol.Optional("location"): cv.string,
+            vol.Optional("clear_entities"): cv.boolean,
+            vol.Optional("zone_id"): cv.positive_int,
+            vol.Optional("shape"): vol.In(list(SUPPORTED_SHAPES)),
+            vol.Optional("data"): vol.Any(None, dict),
+            vol.Optional(ATTR_ROTATION_DEG): vol.Coerce(float),
+            vol.Optional("name"): cv.string,
+            vol.Optional("delete"): cv.boolean,
+            vol.Optional("entities"): vol.All(
+                cv.ensure_list,
+                [
+                    vol.Schema(
+                        {
+                            vol.Required("x"): cv.entity_id,
+                            vol.Required("y"): cv.entity_id,
+                        },
+                        extra=vol.ALLOW_EXTRA,
+                    )
+                ],
+            ),
+        },
+        extra=vol.PREVENT_EXTRA,
+    ),
 )
 
 

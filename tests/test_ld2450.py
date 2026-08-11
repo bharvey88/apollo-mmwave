@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 from homeassistant.helpers.entity_registry import RegistryEntryDisabler
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.apollo_mmwave.ld2450 import resolve_target_pairs
+from custom_components.apollo_mmwave.ld2450 import (
+    effective_target_pairs,
+    resolve_target_pairs,
+)
+from custom_components.apollo_mmwave.store import ZoneStore
 
 if TYPE_CHECKING:
     from homeassistant.helpers.device_registry import DeviceEntry
@@ -164,3 +168,31 @@ async def test_resolve_target_pairs_sorts_numerically_not_lexically(
         "sensor.hall_ld2450_target_2_x",
         "sensor.hall_ld2450_target_10_x",
     ]
+
+
+async def test_effective_target_pairs_does_not_create_a_store_entry(
+    hass, entity_registry, device_registry
+) -> None:
+    """Asking about an unstored device answers from the radar and writes nothing."""
+    device = _make_radar(hass, device_registry, "Garage")
+    for axis in ("x", "y"):
+        entity_registry.async_get_or_create(
+            "sensor",
+            "esphome",
+            f"g1{axis}",
+            device_id=device.id,
+            suggested_object_id=f"garage_ld2450_target_1_{axis}",
+        )
+    store = ZoneStore(hass)
+
+    pairs = effective_target_pairs(hass, store, device.id)
+
+    assert pairs == [
+        {
+            "x": "sensor.garage_ld2450_target_1_x",
+            "y": "sensor.garage_ld2450_target_1_y",
+        }
+    ]
+    # A setdefault read here would leave a permanent entry for a device nobody
+    # has configured, which is the phantom-entry bug this release exists to fix.
+    assert store.devices == {}

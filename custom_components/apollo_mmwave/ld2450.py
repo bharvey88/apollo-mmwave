@@ -73,7 +73,12 @@ def effective_target_pairs(
     hass: HomeAssistant, store: ZoneStore, device_id: str
 ) -> list[dict[str, str]]:
     """Return the pairs a device's zones track, configured or resolved."""
-    configured = store.device(device_id).get(STORE_ENTITIES)
+    # Read through `devices` rather than `store.device()`. That accessor is a
+    # setdefault, so reading through it would mint a permanent store entry for
+    # any device this is asked about. Every caller today passes a device that is
+    # already stored, but asking which pairs a radar tracks is a question, not a
+    # reason to write it down.
+    configured = (store.devices.get(device_id) or {}).get(STORE_ENTITIES)
     # Absent means never configured, so the radar's own targets stand in. An
     # empty list is the user having cleared it, and clearing means nothing.
     if configured is not None:

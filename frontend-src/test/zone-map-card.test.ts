@@ -163,9 +163,9 @@ describe("zone map card theme", () => {
 
     card.hass = themedHass(true);
 
-    expect(card.darkMode).toBe(true);
+    expect((card as any).darkMode).toBe(true);
     expect(
-      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+      card.shadowRoot!.querySelector(".container")?.classList.contains("dark")
     ).toBe(true);
   });
 
@@ -173,12 +173,12 @@ describe("zone map card theme", () => {
     const forcedLight = new ZoneMapCard();
     forcedLight.setConfig({ device_id: "dev123", dark_mode: false } as any);
     forcedLight.hass = themedHass(true);
-    expect(forcedLight.darkMode).toBe(false);
+    expect((forcedLight as any).darkMode).toBe(false);
 
     const forcedDark = new ZoneMapCard();
     forcedDark.setConfig({ device_id: "dev123", dark_mode: true } as any);
     forcedDark.hass = themedHass(false);
-    expect(forcedDark.darkMode).toBe(true);
+    expect((forcedDark as any).darkMode).toBe(true);
   });
 
   it("repaints the canvas when the theme flips while mounted, not just the field", () => {
@@ -186,17 +186,17 @@ describe("zone map card theme", () => {
     card.setConfig({ device_id: "dev123" } as any);
     card.hass = themedHass(false);
 
-    const canvasBefore = card.shadowRoot.querySelector("canvas");
+    const canvasBefore = card.shadowRoot!.querySelector("canvas");
     expect(
-      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+      card.shadowRoot!.querySelector(".container")?.classList.contains("dark")
     ).toBe(false);
 
     card.hass = themedHass(true);
 
-    const canvasAfter = card.shadowRoot.querySelector("canvas");
-    expect(card.darkMode).toBe(true);
+    const canvasAfter = card.shadowRoot!.querySelector("canvas");
+    expect((card as any).darkMode).toBe(true);
     expect(
-      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+      card.shadowRoot!.querySelector(".container")?.classList.contains("dark")
     ).toBe(true);
     // A fresh element, not the same node with a class swapped in: proves the
     // setter actually rebuilt the canvas rather than only flipping a field.
@@ -205,7 +205,7 @@ describe("zone map card theme", () => {
     // The LD2450 pushes coordinates several times a second through this same
     // setter. A second call with no theme change must not rebuild again.
     card.hass = themedHass(true);
-    expect(card.shadowRoot.querySelector("canvas")).toBe(canvasAfter);
+    expect(card.shadowRoot!.querySelector("canvas")).toBe(canvasAfter);
   });
 
   it("omits dark_mode from the stub config so a manually added card follows the theme", () => {
@@ -221,7 +221,7 @@ describe("zone map card theme", () => {
     card.setConfig({ ...stub, device_id: "dev123" } as any);
     card.hass = themedHass(true);
 
-    expect(card.darkMode).toBe(true);
+    expect((card as any).darkMode).toBe(true);
   });
 
   it("reverts to the theme when dark_mode is removed from a mounted card's config", () => {
@@ -229,7 +229,7 @@ describe("zone map card theme", () => {
     card.setConfig({ device_id: "dev123", dark_mode: true } as any);
     // The theme is light, but the config override still wins.
     card.hass = themedHass(false);
-    expect(card.darkMode).toBe(true);
+    expect((card as any).darkMode).toBe(true);
 
     // Home Assistant re-calls setConfig on a live element whenever the config
     // changes; this is what a user editing the card to delete that line looks
@@ -238,7 +238,7 @@ describe("zone map card theme", () => {
     // push happened to correct it, a wrong-theme flash on a card that is
     // theme-following the whole time.
     card.setConfig({ device_id: "dev123" } as any);
-    expect(card.darkMode).toBe(false);
+    expect((card as any).darkMode).toBe(false);
   });
 });
 
@@ -304,7 +304,7 @@ describe("zone map card zone loading", () => {
     expect(card.shadowRoot.textContent).toContain("dev123");
     // An empty canvas reads as "this radar has no zones yet", which is exactly
     // the ambiguity this rework removes.
-    expect(card.shadowRoot.querySelector("canvas")).toBeNull();
+    expect(card.shadowRoot!.querySelector("canvas")).toBeNull();
   });
 
   it("retargets its reads when the card is pointed at another radar", async () => {
@@ -449,7 +449,7 @@ describe("zone map card target pairs", () => {
     expect(card.shadowRoot.getElementById("btnApplyEntities")).toBeNull();
     expect(card.shadowRoot.getElementById("entityPairs")).toBeNull();
     expect(card.shadowRoot.getElementById("deviceComboWrapper")).toBeNull();
-    expect(card.shadowRoot.querySelector(".combo-list")).toBeNull();
+    expect(card.shadowRoot!.querySelector(".combo-list")).toBeNull();
     expect(card.shadowRoot.getElementById("entityStatus")).toBeTruthy();
   });
 

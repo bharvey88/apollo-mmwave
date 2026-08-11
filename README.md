@@ -87,12 +87,19 @@ custom names, and area assignments: only the internal unique id is rewritten.
 **Renaming a radar no longer orphans its zones.** Zones are keyed by device id
 instead of by display name.
 
-**Zones from the older two-piece setup are imported.** If you have the
-standalone `zone_mapper` integration installed, its zones are read on first
-setup of 2.0. The import is read-only and nothing belonging to that integration
-is renamed or removed. **Do not uninstall the old integration until you have
-confirmed your zones came across**, because its restore data is the only copy
-and it goes away with its entities.
+**Zones from the older two-piece setup are imported when nothing is stored
+yet.** If you have the standalone `zone_mapper` integration and Apollo mmWave
+has no stored zone data of its own, its zones are read in at setup. That is a
+fresh install, or any upgrade from before 1.2.0, which is the release that
+moved zone data into storage. The import is read-only and nothing belonging to
+that integration is renamed or removed. **Do not uninstall the old integration
+until you have confirmed your zones came across**, because its restore data is
+the only copy and it goes away with its entities.
+
+Upgrading from 1.2.0 or later, you already have stored zone data, so the import
+is skipped and 2.0 keeps what you have. Your `zone_mapper` zones are untouched,
+so open the Apollo Zone Map card and redraw the ones you want here, then remove
+the old integration once you are happy with them.
 
 **The sidebar dashboard is a real dashboard.** It has a proper name on
 Settings → Dashboards, "take control" works on it, and you can delete it. On
@@ -113,6 +120,13 @@ Editing a strategy view in the Home Assistant UI still throws away its cards.
 That is how Home Assistant treats strategy views and not something this
 integration can change. Use "take control" on the dashboard instead of editing
 the view.
+
+If you renamed a radar before upgrading, the zones you drew under its old
+display name are kept but not shown: the card comes up empty and those zone
+entities read as unavailable. To get them back, rename the radar to the old
+name and reload the integration. That check runs on every setup, so the zones
+move onto the device as soon as the names line up again. If you would rather
+keep the new name, redraw the zones on the card.
 
 If the same zone number exists both on a device and in leftover pre-2.0 data
 that later resolves to that device, the copy already on the device wins and the

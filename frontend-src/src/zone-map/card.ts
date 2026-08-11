@@ -16,6 +16,7 @@
 
 import { registerElement } from '../register';
 import { connectZones } from './api';
+import { ZONE_MAP_EDITOR_TAG, firstLd2450DeviceId } from './editor';
 
 const COLOR = Object.freeze({
   ui: {
@@ -147,10 +148,8 @@ export class ZoneMapCard extends HTMLElement {
     this._cursorPoint = null;
     this._activeInput = null;
     this.trackedEntities = [];
-    this._selectedDeviceId = null;
     this.showZones = false;
     this.showConfig = false;
-    this.showDeviceTargets = false;
     this._polyPoints = [];
     this.zones = [];
     this.zoneConfig = [];
@@ -164,9 +163,6 @@ export class ZoneMapCard extends HTMLElement {
     // null entities means the radar's own detected targets are in use. The
     // card has to say which of the two it is showing.
     this._usingSuggestedEntities = false;
-    // Set while the user has unsaved pair edits, so a payload arriving mid-edit
-    // (their own rotation drag will cause one) does not wipe what they typed.
-    this._entitiesDirty = false;
     // Grid defaults (mm)
     this.xMin = DEFAULT_GRID.xMin;
     this.xMax = DEFAULT_GRID.xMax;
@@ -195,8 +191,13 @@ export class ZoneMapCard extends HTMLElement {
     this._coneRingsCache = null;
   }
 
+  /** The card's config UI, an `ha-device-picker` and a title field. */
+  static getConfigElement() {
+    return document.createElement(ZONE_MAP_EDITOR_TAG);
+  }
+
   // Default stub config
-  static getStubConfig() {
+  static getStubConfig(hass) {
     return {
       type: 'custom:apollo-radar-zone-map-card',
       dark_mode: false,
@@ -207,11 +208,12 @@ export class ZoneMapCard extends HTMLElement {
       // optional, px label size override
       input_units: 'mm',
       grid_units: 'mm',
-      // No device_id: there is nothing sensible to guess, and setConfig says
-      // so plainly. Task 12 replaces this stub with a real device picker.
+      // A card dragged out of the Lovelace picker opened straight onto the
+      // "device_id required" error while this was blank. Empty only when the
+      // system has no tracking radar at all, and then the error is the truth.
+      device_id: firstLd2450DeviceId(hass) ?? '',
       title: '',
       // Units support: 'mm', 'cm', 'm', 'in', 'ft' converts to millimeters internally
-      // By default, use the in-card dropdowns to select a device and X/Y entities.
       // Zones can be managed in-card; you can optionally pre-seed a list here:
       // zones: [ { id: 1, name: 'Zone 1' } ],
       grid: {
@@ -252,10 +254,6 @@ export class ZoneMapCard extends HTMLElement {
       // would leave the card drawing one radar and saving to another.
       this._resetDeviceState();
     }
-    // Whatever the user was in the middle of belongs to the config that was
-    // replaced. Nothing else clears this, and a card stuck holding it stops
-    // taking payloads for the rest of its life.
-    this._entitiesDirty = false;
     // Display only, so a user can call the card "Kitchen" and still share zone
     // data with the auto-generated dashboard. Deliberately NOT `this.title`:
     // that is a native HTMLElement accessor and would put a browser tooltip
@@ -330,10 +328,8 @@ export class ZoneMapCard extends HTMLElement {
     this._loadError = null;
     this._deviceLabel = null;
     this._usingSuggestedEntities = false;
-    this._entitiesDirty = false;
     this.zones = [];
     this.trackedEntities = [];
-    this._selectedDeviceId = null;
     this.selectedZone = null;
     // The snapshot holds the OLD radar's geometry, and _performUndo writes it
     // under whatever device the card points at when the button is clicked. A
@@ -360,16 +356,12 @@ export class ZoneMapCard extends HTMLElement {
       // The store, not the entity registry, is where zones live now, so this
       // does not wait for a canvas or for any entity to exist.
       this._connectZones();
-      // Load device/entity registries once on first hass injection
-      this._ensureRegistriesLoaded();
     }
   }
 
   connectedCallback() {
     // Home Assistant detaches and re-attaches cards as views change, and
     // `disconnectedCallback` closed the subscription on the way out.
-    // An editing session does not survive the card leaving the page either.
-    this._entitiesDirty = false;
     this._connectZones();
   }
 
@@ -466,9 +458,9 @@ export class ZoneMapCard extends HTMLElement {
     if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
   }
 
+  /** Take the store's answer. Nothing in the card edits the pair list, so
+   *  there is never an unsaved edit here to protect. */
   _applyTrackedEntities(config) {
-    // Unsaved edits win. Everything else here is the store's answer.
-    if (this._entitiesDirty) return;
     const suggested = Array.isArray(config.suggested_entities)
       ? config.suggested_entities
       : [];
@@ -484,12 +476,7 @@ export class ZoneMapCard extends HTMLElement {
         (pair) => ({ ...pair }),
       );
     }
-    const first = this.trackedEntities[0];
-    if (!this._selectedDeviceId && first) {
-      const info = this._findEntityInfo(first.x) || this._findEntityInfo(first.y);
-      if (info) this._selectedDeviceId = info.device_id || null;
-    }
-    this._renderEntitySelection();
+    this._renderEntityStatus();
   }
 
   processEntityConfig(entityConfig) {
@@ -628,30 +615,12 @@ export class ZoneMapCard extends HTMLElement {
         .container.dark .zone-item { background: ${COLOR.ui.zoneItemDarkBg}; color: ${COLOR.ui.zoneItemDarkText}; }
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
-        .entity-pair-row { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "label remove" "x x" "y y"; gap: 6px; align-items: center; margin: 6px 0; }
-        .entity-pair-row > label { grid-area: label; font-weight: 600; opacity: 0.95; }
-        .entity-pair-row > .combobox-wrapper:nth-of-type(1) { grid-area: x; }
-        .entity-pair-row > .combobox-wrapper:nth-of-type(2) { grid-area: y; }
-        .entity-pair-row > button { grid-area: remove; }
-        .entity-pair-row select, .entity-pair-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
-        .container.dark .entity-pair-row select, .container.dark .entity-pair-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
         .entity-row select, .entity-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
         .container.dark .entity-row select, .container.dark .entity-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
         .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
         .entity-controls select, .entity-controls input { width: 100%; }
-        .combobox-wrapper { position: relative; width: 100%; }
-        .combobox-wrapper input { width: 100%; padding-right: 24px; }
-        .combo-arrow { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 10px; opacity: 0.7; padding: 4px; }
-        .combo-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 0 0 6px 6px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0,0,0,0.1)); }
-        .container.dark .combo-list { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; }
-        .combo-list.open { display: block; }
-        .combo-item { padding: 6px 8px; cursor: pointer; font-size: 12px; }
-        .combo-item:hover { background: var(--secondary-background-color); }
-        .container.dark .combo-item:hover { background: ${COLOR.ui.darkZoneButtonBg}; }
-        .combo-item.selected { font-weight: bold; color: var(--primary-color); }
-        .combo-item.disabled { opacity: 0.5; cursor: default; }
         .pair-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
         .subtle { opacity: 0.85; font-size: 0.92em; }
         .config { margin-top: 0; }
@@ -695,25 +664,10 @@ export class ZoneMapCard extends HTMLElement {
               <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
               <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
             </div>
-            <div class="subsection-header" id="toggleDeviceTargets">
-              <span class="subsection-title">Device and Targets</span>
-              <span id="caretDeviceTargets">${this.showDeviceTargets ? '▾' : '▸'}</span>
-            </div>
-            <div class="config-content ${this.showDeviceTargets ? 'open' : ''}" id="sectionDeviceTargets">
-              <div class="entity-selection">
-                <div class="entity-controls">
-                  <label for="deviceInput" class="subtle">Device</label>
-                  <div class="combobox-wrapper" id="deviceComboWrapper"></div>
-                  <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
-                </div>
-                <div id="entityPairs"></div>
-                <div class="info subtle" id="entityStatus"></div>
-                <div class="pair-actions">
-                  <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
-                  <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
-                </div>
-              </div>
-            </div>
+            <!-- Read only. The radar's X/Y targets are resolved by the
+                 integration, and the DIY override is the update_zone
+                 service, not a second pair picker in here. -->
+            <div class="info subtle" id="entityStatus"></div>
             <div class="subsection-header" id="toggleZones">
               <span class="subsection-title">Zones</span>
               <span id="caretZones">${this.showZones ? '▾' : '▸'}</span>
@@ -756,7 +710,7 @@ export class ZoneMapCard extends HTMLElement {
     this.renderZoneButtons();
     this.setupCanvas();
     this.attachEventListeners();
-    this._renderEntitySelection();
+    this._renderEntityStatus();
     this._renderZoneManager();
     if (this._zoneConfigPayload) {
       // A render throws the old DOM away, so the last payload the store sent
@@ -1038,60 +992,9 @@ export class ZoneMapCard extends HTMLElement {
       });
     }
 
-    const btnAddPair = this.shadowRoot.getElementById('btnAddPair');
-    if (btnAddPair) {
-      btnAddPair.addEventListener('click', () => {
-        this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-      });
-    }
-
-    const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
-    if (btnApplyEntities) {
-      btnApplyEntities.addEventListener('click', async () => {
-        if (!this._hass) return;
-        const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
-        // An `entities: []` payload means "no change" to the service, so a user
-        // who emptied the list would get a "saved" toast and no save. Emptying
-        // it is only ever expressed as clear_entities.
-        const payload = pairs.length
-          ? { device_id: this.deviceId, entities: pairs }
-          : { device_id: this.deviceId, clear_entities: true };
-        this.drawGrid();
-        const saved = await this._saveZoneUpdate(
-          payload,
-          pairs.length ? 'Entity pairs saved' : 'Target tracking cleared',
-        );
-        // The hold stays on a rejection, so the list the user built is still
-        // theirs to retry rather than being reverted by the next payload.
-        if (saved) this._entitiesDirty = false;
-      });
-    }
-
     const btnAddZone = this.shadowRoot.getElementById('btnAddZone');
     if (btnAddZone) {
       btnAddZone.addEventListener('click', () => this._handleAddZone());
-    }
-
-    const toggleDeviceTargets = this.shadowRoot.getElementById('toggleDeviceTargets');
-    const caretDeviceTargets = this.shadowRoot.getElementById('caretDeviceTargets');
-    const sectionDeviceTargets = this.shadowRoot.getElementById('sectionDeviceTargets');
-    if (toggleDeviceTargets && caretDeviceTargets && sectionDeviceTargets) {
-      toggleDeviceTargets.addEventListener('click', () => {
-        this.showDeviceTargets = !this.showDeviceTargets;
-        if (this.showDeviceTargets) {
-          sectionDeviceTargets.classList.add('open');
-          // Allow overflow after transition so dropdowns aren't clipped
-          setTimeout(() => {
-            if (this.showDeviceTargets) sectionDeviceTargets.style.overflow = 'visible';
-          }, 300);
-        } else {
-          sectionDeviceTargets.style.overflow = 'hidden';
-          sectionDeviceTargets.classList.remove('open');
-        }
-        caretDeviceTargets.textContent = this.showDeviceTargets ? '▾' : '▸';
-      });
     }
 
     const toggleZones = this.shadowRoot.getElementById('toggleZones');
@@ -2582,219 +2485,14 @@ export class ZoneMapCard extends HTMLElement {
     }
   }
 
-  async _ensureRegistriesLoaded() {
-    try {
-      const [devices, entities] = await Promise.all([
-        this._hass.callWS({ type: 'config/device_registry/list' }),
-        this._hass.callWS({ type: 'config/entity_registry/list' }),
-      ]);
-      this._devices = Array.isArray(devices) ? devices : [];
-      this._allEntities = Array.isArray(entities) ? entities : [];
-      // Pick a default device if any entity matches the pairs the store sent
-      if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
-        const info =
-          this._findEntityInfo(this.trackedEntities[0]?.x) ||
-          this._findEntityInfo(this.trackedEntities[0]?.y);
-        if (info) this._selectedDeviceId = info.device_id;
-      }
-      this._renderEntitySelection();
-    } catch {
-      // Silently ignore; dropdowns will remain empty
-      // console.warn('Failed to load registries', _e);
-    }
-  }
-
-  _setupCombobox(wrapper, options, initialValue, onChange) {
-    wrapper.innerHTML = '';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = initialValue || '';
-    input.placeholder = 'Type to search...';
-    input.autocomplete = 'off';
-
-    const arrow = document.createElement('span');
-    arrow.className = 'combo-arrow';
-    arrow.textContent = '▼';
-
-    const list = document.createElement('div');
-    list.className = 'combo-list';
-
-    const renderList = (filterText = '') => {
-      list.innerHTML = '';
-      const lower = filterText.toLowerCase();
-      const filtered = options.filter((opt) => String(opt).toLowerCase().includes(lower));
-
-      if (filtered.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'combo-item disabled';
-        empty.textContent = 'No matches';
-        list.appendChild(empty);
-      } else {
-        filtered.forEach((opt) => {
-          const item = document.createElement('div');
-          item.className = 'combo-item';
-          if (opt === input.value) item.classList.add('selected');
-          item.textContent = opt;
-          item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            input.value = opt;
-            onChange(opt);
-            closeList();
-          });
-          list.appendChild(item);
-        });
-      }
-    };
-
-    const openList = () => {
-      renderList(input.value);
-      list.classList.add('open');
-    };
-
-    const closeList = () => {
-      list.classList.remove('open');
-    };
-
-    input.addEventListener('input', () => {
-      renderList(input.value);
-      if (!list.classList.contains('open')) list.classList.add('open');
-    });
-
-    input.addEventListener('focus', () => {
-      renderList(input.value);
-      list.classList.add('open');
-    });
-
-    input.addEventListener('blur', () => {
-      // Delay closing to allow item click to register
-      setTimeout(closeList, 200);
-    });
-
-    arrow.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (list.classList.contains('open')) {
-        closeList();
-      } else {
-        input.focus();
-      }
-    });
-
-    wrapper.appendChild(input);
-    wrapper.appendChild(arrow);
-    wrapper.appendChild(list);
-
-    return { input, close: closeList };
-  }
-
-  _renderEntitySelection() {
-    const devWrapper = this.shadowRoot?.getElementById('deviceComboWrapper');
-    const pairsDiv = this.shadowRoot?.getElementById('entityPairs');
-    if (!devWrapper || !pairsDiv) return;
-
-    // Populate device combobox, filtered to LD2450-compatible devices.
-    // Detect via model, user-assigned name, or any associated entity_id.
-    // Fall back to all devices if nothing matches (e.g. entities renamed).
-    const allDevices = this._devices || [];
-    const ld2450DeviceIds = new Set(
-      (this._allEntities || [])
-        .filter((e) => e.entity_id && e.entity_id.toLowerCase().includes('ld2450') && e.device_id)
-        .map((e) => e.device_id)
-    );
-    const matches = allDevices.filter((d) => {
-      const model = (d.model || '').toLowerCase();
-      const name = (d.name_by_user || d.name || '').toLowerCase();
-      return model.includes('ld2450') || name.includes('ld2450') || ld2450DeviceIds.has(d.id);
-    });
-    const devices = (matches.length > 0 ? matches : allDevices).slice().sort((a, b) => {
-      const nameA = a.name_by_user || a.name || a.id;
-      const nameB = b.name_by_user || b.name || b.id;
-      return nameA.localeCompare(nameB);
-    });
-    const deviceOptions = devices.map((d) => d.name_by_user || d.name || d.id);
-
-    let currentDeviceLabel = '';
-    if (this._selectedDeviceId) {
-      const d = devices.find((dev) => String(dev.id) === String(this._selectedDeviceId));
-      if (d) currentDeviceLabel = d.name_by_user || d.name || d.id;
-    }
-
-    this._setupCombobox(devWrapper, deviceOptions, currentDeviceLabel, (val) => {
-      const device = devices.find((d) => (d.name_by_user || d.name || d.id) === val);
-      if (device) {
-        if (device.id !== this._selectedDeviceId) {
-          this._selectedDeviceId = device.id;
-          this._suggestPairsFromDevice(true);
-          this._entitiesDirty = true;
-          this._renderEntitySelection();
-        }
-      } else if (!val) {
-        this._selectedDeviceId = null;
-        this.trackedEntities = [];
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-        this.drawGrid();
-      }
-    });
-
-    // Build options for entities belonging to selected device (sensors only)
-    const deviceEntities = (this._allEntities || []).filter(
-      (e) => !this._selectedDeviceId || e.device_id === this._selectedDeviceId,
-    );
-    const sensorEntityIds = deviceEntities
-      .filter((e) => e.entity_id || '')
-      .map((e) => e.entity_id)
-      .sort((a, b) => a.localeCompare(b));
-
-    // Render pairs
-    pairsDiv.innerHTML = '';
-    const pairs = this.trackedEntities && this.trackedEntities.length ? this.trackedEntities : [];
-    pairs.forEach((pair, idx) => {
-      const row = document.createElement('div');
-      row.className = 'entity-pair-row';
-      const label = document.createElement('label');
-      label.textContent = `Target ${idx + 1}`;
-
-      const wrapperX = document.createElement('div');
-      wrapperX.className = 'combobox-wrapper';
-      this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
-        this.trackedEntities[idx].x = val;
-        this._entitiesDirty = true;
-        this.drawGrid();
-      });
-
-      const wrapperY = document.createElement('div');
-      wrapperY.className = 'combobox-wrapper';
-      this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
-        this.trackedEntities[idx].y = val;
-        this._entitiesDirty = true;
-        this.drawGrid();
-      });
-
-      const rmBtn = document.createElement('button');
-      rmBtn.textContent = 'Remove';
-      rmBtn.addEventListener('click', () => {
-        this.trackedEntities.splice(idx, 1);
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-        this.drawGrid();
-      });
-
-      row.appendChild(label);
-      row.appendChild(wrapperX);
-      row.appendChild(wrapperY);
-      row.appendChild(rmBtn);
-      pairsDiv.appendChild(row);
-    });
-
-    this._renderEntityStatus();
-  }
-
   /**
-   * Say which of the three states the pair list is in.
+   * Say which of the three states the target list is in.
    *
-   * Never configured and deliberately cleared look identical in the list (both
-   * are empty rows), and telling a user that nothing is tracked when the radar
-   * is quietly tracking its own targets is how the old card hid its state.
+   * Never configured and deliberately cleared both draw an empty canvas, and
+   * telling a user that nothing is tracked when the radar is quietly tracking
+   * its own targets is how the old card hid its state. Read only: the
+   * integration resolves the pairs and `apollo_mmwave.update_zone` overrides
+   * them.
    */
   _renderEntityStatus() {
     const host = this.shadowRoot?.getElementById('entityStatus');
@@ -2802,72 +2500,13 @@ export class ZoneMapCard extends HTMLElement {
     const configured = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
     if (this._usingSuggestedEntities) {
       host.textContent = configured.length
-        ? `Using this radar's own detected targets (${configured.length}). Apply to pin them.`
+        ? `Using this radar's own detected targets (${configured.length}).`
         : "This radar has no detected targets yet, and none are configured.";
       return;
     }
     host.textContent = configured.length
       ? `Tracking ${configured.length} target pair${configured.length === 1 ? '' : 's'}.`
-      : 'No targets are tracked. Add a pair, or apply an empty list to keep it that way.';
-  }
-
-  _findEntityInfo(entityId) {
-    if (!entityId) return null;
-    return (this._allEntities || []).find((e) => e.entity_id === entityId) || null;
-  }
-
-  _suggestPairsFromDevice(forceReplace = false) {
-    if (!this._selectedDeviceId) return false;
-    const list = (this._allEntities || []).filter(
-      (e) => e.device_id === this._selectedDeviceId && (e.entity_id || ''),
-    );
-    const xs = list.filter(
-      (e) => /(^|[_-])x(\b|[_-])/.test(e.entity_id) || /_x$/.test(e.entity_id),
-    );
-    const ys = list.filter(
-      (e) => /(^|[_-])y(\b|[_-])/.test(e.entity_id) || /_y$/.test(e.entity_id),
-    );
-    const pairs = [];
-    const used = new Set();
-    // Try to pair by replacing x->y in name
-    xs.forEach((xe) => {
-      const guessY = xe.entity_id.replace(/x(?!.*x)/, 'y').replace(/_x(?!.*_x)/, '_y');
-      const ye = list.find((e) => e.entity_id === guessY) || ys.find((e) => !used.has(e.entity_id));
-      if (ye) {
-        used.add(ye.entity_id);
-        pairs.push({ x: xe.entity_id, y: ye.entity_id });
-      }
-    });
-    // Fallback: take numeric-looking entities two by two
-    if (pairs.length === 0) {
-      const numeric = list
-        .map((e) => e.entity_id)
-        .filter((id) => {
-          const st = this._hass?.states[id];
-          return (
-            st &&
-            st.state !== 'unknown' &&
-            st.state !== 'unavailable' &&
-            !Number.isNaN(parseFloat(st.state))
-          );
-        });
-      for (let i = 0; i + 1 < numeric.length; i += 2) {
-        pairs.push({ x: numeric[i], y: numeric[i + 1] });
-      }
-    }
-    if (pairs.length) {
-      // Replace existing pairs when forced or when nothing is set yet
-      if (forceReplace || !this.trackedEntities || this.trackedEntities.length === 0) {
-        this.trackedEntities = pairs;
-        return true;
-      }
-      return false;
-    }
-    // If forced and no pairs found, clear to avoid stale pairs from previous device
-    if (forceReplace) {
-      this.trackedEntities = [];
-    }
-    return false;
+      : 'No targets are tracked, which is what this radar was told to do.';
   }
 
   _notify(message) {

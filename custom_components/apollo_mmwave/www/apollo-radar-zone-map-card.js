@@ -132,6 +132,110 @@ async function connectZones(hass, deviceId, handlers) {
     }
   };
 }
+const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
+function hasLd2450Device(hass, deviceId) {
+  for (const [id, e] of Object.entries(hass.entities)) {
+    if (e.device_id !== deviceId || !id.startsWith("sensor.")) continue;
+    if (TARGET_X.test(id.slice(id.indexOf(".") + 1))) return true;
+  }
+  return false;
+}
+const ZONE_MAP_CARD_TYPE = "custom:apollo-radar-zone-map-card";
+const ZONE_MAP_EDITOR_TAG = "apollo-radar-zone-map-card-editor";
+function firstLd2450DeviceId(hass) {
+  if (!hass) return void 0;
+  const fromRegistry = Object.keys(hass.devices ?? {});
+  const candidates = fromRegistry.length ? fromRegistry : Array.from(
+    new Set(
+      Object.values(hass.entities ?? {}).map((entry) => entry == null ? void 0 : entry.device_id).filter((id) => !!id)
+    )
+  );
+  return candidates.find((id) => hasLd2450Device(hass, id));
+}
+const STYLE = `
+  :host { display: block; }
+  .form { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; }
+  .hint { font-size: 12px; color: var(--secondary-text-color); }
+`;
+class ZoneMapCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this._config = { type: ZONE_MAP_CARD_TYPE };
+    this.attachShadow({ mode: "open" });
+  }
+  setConfig(config) {
+    this._config = { ...config };
+    this._render();
+  }
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+  get hass() {
+    return this._hass;
+  }
+  _render() {
+    this._build();
+    if (!this._picker || !this._title) return;
+    this._picker.hass = this._hass;
+    const deviceId = String(this._config.device_id ?? "");
+    const title = String(this._config.title ?? "");
+    if (this._picker.value !== deviceId) this._picker.value = deviceId;
+    if (this._title.value !== title) this._title.value = title;
+  }
+  /** The DOM is built once and then updated. HA sets `hass` on every state
+   *  tick, and rebuilding under the user would drop focus mid-word. */
+  _build() {
+    if (this._picker || !this.shadowRoot) return;
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    const form = document.createElement("div");
+    form.className = "form";
+    const picker = document.createElement("ha-device-picker");
+    picker.label = "Radar";
+    picker.deviceFilter = (device) => !!this._hass && !!(device == null ? void 0 : device.id) && hasLd2450Device(this._hass, device.id);
+    picker.addEventListener("value-changed", (event) => {
+      var _a;
+      const value = (_a = event.detail) == null ? void 0 : _a.value;
+      this._commit("device_id", typeof value === "string" ? value : "");
+    });
+    const title = document.createElement("ha-textfield");
+    title.label = "Title (optional)";
+    title.addEventListener("input", () => {
+      var _a;
+      this._commit("title", String(((_a = this._title) == null ? void 0 : _a.value) ?? ""));
+    });
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = "The card tracks this radar's own detected targets. To point it at other X/Y sensors, call the apollo_mmwave.update_zone service with an entities list.";
+    form.append(picker, title, hint);
+    this.shadowRoot.append(style, form);
+    this._picker = picker;
+    this._title = title;
+  }
+  /**
+   * Fold one field into the config and hand the whole thing to Lovelace.
+   *
+   * An empty title is dropped rather than written as `title: ""`, and a value
+   * equal to the one already held emits nothing: HA re-renders the editor from
+   * every `config-changed`, and the pickers echo their value back on re-render.
+   */
+  _commit(key, value) {
+    const current = this._config[key];
+    if (current === value || value === "" && current === void 0) return;
+    const config = { ...this._config, [key]: value };
+    if (key === "title" && value === "") delete config.title;
+    this._config = config;
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+}
+registerElement(ZONE_MAP_EDITOR_TAG, ZoneMapCardEditor);
 const COLOR = Object.freeze({
   ui: {
     lightCanvasBackground: "#ffffff",
@@ -252,10 +356,8 @@ class ZoneMapCard extends HTMLElement {
     this._cursorPoint = null;
     this._activeInput = null;
     this.trackedEntities = [];
-    this._selectedDeviceId = null;
     this.showZones = false;
     this.showConfig = false;
-    this.showDeviceTargets = false;
     this._polyPoints = [];
     this.zones = [];
     this.zoneConfig = [];
@@ -265,7 +367,6 @@ class ZoneMapCard extends HTMLElement {
     this._zoneConnection = null;
     this._deviceLabel = null;
     this._usingSuggestedEntities = false;
-    this._entitiesDirty = false;
     this.xMin = DEFAULT_GRID.xMin;
     this.xMax = DEFAULT_GRID.xMax;
     this.yMin = DEFAULT_GRID.yMin;
@@ -290,8 +391,12 @@ class ZoneMapCard extends HTMLElement {
     this._gridCache = null;
     this._coneRingsCache = null;
   }
+  /** The card's config UI, an `ha-device-picker` and a title field. */
+  static getConfigElement() {
+    return document.createElement(ZONE_MAP_EDITOR_TAG);
+  }
   // Default stub config
-  static getStubConfig() {
+  static getStubConfig(hass) {
     return {
       type: "custom:apollo-radar-zone-map-card",
       dark_mode: false,
@@ -302,11 +407,12 @@ class ZoneMapCard extends HTMLElement {
       // optional, px label size override
       input_units: "mm",
       grid_units: "mm",
-      // No device_id: there is nothing sensible to guess, and setConfig says
-      // so plainly. Task 12 replaces this stub with a real device picker.
+      // A card dragged out of the Lovelace picker opened straight onto the
+      // "device_id required" error while this was blank. Empty only when the
+      // system has no tracking radar at all, and then the error is the truth.
+      device_id: firstLd2450DeviceId(hass) ?? "",
       title: "",
       // Units support: 'mm', 'cm', 'm', 'in', 'ft' converts to millimeters internally
-      // By default, use the in-card dropdowns to select a device and X/Y entities.
       // Zones can be managed in-card; you can optionally pre-seed a list here:
       // zones: [ { id: 1, name: 'Zone 1' } ],
       grid: {
@@ -335,7 +441,6 @@ class ZoneMapCard extends HTMLElement {
     if (previousDeviceId !== this.deviceId) {
       this._resetDeviceState();
     }
-    this._entitiesDirty = false;
     this.cardTitle = config.title === void 0 ? "" : String(config.title);
     this._lockConfigured = config.start_locked !== void 0;
     if (this._lockConfigured) {
@@ -395,10 +500,8 @@ class ZoneMapCard extends HTMLElement {
     this._loadError = null;
     this._deviceLabel = null;
     this._usingSuggestedEntities = false;
-    this._entitiesDirty = false;
     this.zones = [];
     this.trackedEntities = [];
-    this._selectedDeviceId = null;
     this.selectedZone = null;
     this._undoSnapshot = null;
     this.coneAngleDeg = DEFAULT_CONE.angleDeg;
@@ -414,11 +517,9 @@ class ZoneMapCard extends HTMLElement {
     }
     if (firstTime && this._hass) {
       this._connectZones();
-      this._ensureRegistriesLoaded();
     }
   }
   connectedCallback() {
-    this._entitiesDirty = false;
     this._connectZones();
   }
   _connectZones() {
@@ -495,8 +596,9 @@ class ZoneMapCard extends HTMLElement {
     if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
     if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
   }
+  /** Take the store's answer. Nothing in the card edits the pair list, so
+   *  there is never an unsaved edit here to protect. */
   _applyTrackedEntities(config) {
-    if (this._entitiesDirty) return;
     const suggested = Array.isArray(config.suggested_entities) ? config.suggested_entities : [];
     if (config.entities === null || config.entities === void 0) {
       this._usingSuggestedEntities = true;
@@ -507,12 +609,7 @@ class ZoneMapCard extends HTMLElement {
         (pair) => ({ ...pair })
       );
     }
-    const first = this.trackedEntities[0];
-    if (!this._selectedDeviceId && first) {
-      const info = this._findEntityInfo(first.x) || this._findEntityInfo(first.y);
-      if (info) this._selectedDeviceId = info.device_id || null;
-    }
-    this._renderEntitySelection();
+    this._renderEntityStatus();
   }
   processEntityConfig(entityConfig) {
     if (!entityConfig || !Array.isArray(entityConfig)) {
@@ -646,30 +743,12 @@ class ZoneMapCard extends HTMLElement {
         .container.dark .zone-item { background: ${COLOR.ui.zoneItemDarkBg}; color: ${COLOR.ui.zoneItemDarkText}; }
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
-        .entity-pair-row { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "label remove" "x x" "y y"; gap: 6px; align-items: center; margin: 6px 0; }
-        .entity-pair-row > label { grid-area: label; font-weight: 600; opacity: 0.95; }
-        .entity-pair-row > .combobox-wrapper:nth-of-type(1) { grid-area: x; }
-        .entity-pair-row > .combobox-wrapper:nth-of-type(2) { grid-area: y; }
-        .entity-pair-row > button { grid-area: remove; }
-        .entity-pair-row select, .entity-pair-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
-        .container.dark .entity-pair-row select, .container.dark .entity-pair-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
         .entity-row select, .entity-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
         .container.dark .entity-row select, .container.dark .entity-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
         .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
         .entity-controls select, .entity-controls input { width: 100%; }
-        .combobox-wrapper { position: relative; width: 100%; }
-        .combobox-wrapper input { width: 100%; padding-right: 24px; }
-        .combo-arrow { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 10px; opacity: 0.7; padding: 4px; }
-        .combo-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 0 0 6px 6px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0,0,0,0.1)); }
-        .container.dark .combo-list { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; }
-        .combo-list.open { display: block; }
-        .combo-item { padding: 6px 8px; cursor: pointer; font-size: 12px; }
-        .combo-item:hover { background: var(--secondary-background-color); }
-        .container.dark .combo-item:hover { background: ${COLOR.ui.darkZoneButtonBg}; }
-        .combo-item.selected { font-weight: bold; color: var(--primary-color); }
-        .combo-item.disabled { opacity: 0.5; cursor: default; }
         .pair-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
         .subtle { opacity: 0.85; font-size: 0.92em; }
         .config { margin-top: 0; }
@@ -713,25 +792,10 @@ class ZoneMapCard extends HTMLElement {
               <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
               <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
             </div>
-            <div class="subsection-header" id="toggleDeviceTargets">
-              <span class="subsection-title">Device and Targets</span>
-              <span id="caretDeviceTargets">${this.showDeviceTargets ? "▾" : "▸"}</span>
-            </div>
-            <div class="config-content ${this.showDeviceTargets ? "open" : ""}" id="sectionDeviceTargets">
-              <div class="entity-selection">
-                <div class="entity-controls">
-                  <label for="deviceInput" class="subtle">Device</label>
-                  <div class="combobox-wrapper" id="deviceComboWrapper"></div>
-                  <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
-                </div>
-                <div id="entityPairs"></div>
-                <div class="info subtle" id="entityStatus"></div>
-                <div class="pair-actions">
-                  <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
-                  <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
-                </div>
-              </div>
-            </div>
+            <!-- Read only. The radar's X/Y targets are resolved by the
+                 integration, and the DIY override is the update_zone
+                 service, not a second pair picker in here. -->
+            <div class="info subtle" id="entityStatus"></div>
             <div class="subsection-header" id="toggleZones">
               <span class="subsection-title">Zones</span>
               <span id="caretZones">${this.showZones ? "▾" : "▸"}</span>
@@ -769,7 +833,7 @@ class ZoneMapCard extends HTMLElement {
     this.renderZoneButtons();
     this.setupCanvas();
     this.attachEventListeners();
-    this._renderEntitySelection();
+    this._renderEntityStatus();
     this._renderZoneManager();
     if (this._zoneConfigPayload) {
       this._applyZoneConfig(this._zoneConfigPayload);
@@ -1016,49 +1080,9 @@ class ZoneMapCard extends HTMLElement {
         if (caret) caret.textContent = this.showConfig ? "▾" : "▸";
       });
     }
-    const btnAddPair = this.shadowRoot.getElementById("btnAddPair");
-    if (btnAddPair) {
-      btnAddPair.addEventListener("click", () => {
-        this.trackedEntities = [...this.trackedEntities || [], { x: "", y: "" }];
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-      });
-    }
-    const btnApplyEntities = this.shadowRoot.getElementById("btnApplyEntities");
-    if (btnApplyEntities) {
-      btnApplyEntities.addEventListener("click", async () => {
-        if (!this._hass) return;
-        const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
-        const payload = pairs.length ? { device_id: this.deviceId, entities: pairs } : { device_id: this.deviceId, clear_entities: true };
-        this.drawGrid();
-        const saved = await this._saveZoneUpdate(
-          payload,
-          pairs.length ? "Entity pairs saved" : "Target tracking cleared"
-        );
-        if (saved) this._entitiesDirty = false;
-      });
-    }
     const btnAddZone = this.shadowRoot.getElementById("btnAddZone");
     if (btnAddZone) {
       btnAddZone.addEventListener("click", () => this._handleAddZone());
-    }
-    const toggleDeviceTargets = this.shadowRoot.getElementById("toggleDeviceTargets");
-    const caretDeviceTargets = this.shadowRoot.getElementById("caretDeviceTargets");
-    const sectionDeviceTargets = this.shadowRoot.getElementById("sectionDeviceTargets");
-    if (toggleDeviceTargets && caretDeviceTargets && sectionDeviceTargets) {
-      toggleDeviceTargets.addEventListener("click", () => {
-        this.showDeviceTargets = !this.showDeviceTargets;
-        if (this.showDeviceTargets) {
-          sectionDeviceTargets.classList.add("open");
-          setTimeout(() => {
-            if (this.showDeviceTargets) sectionDeviceTargets.style.overflow = "visible";
-          }, 300);
-        } else {
-          sectionDeviceTargets.style.overflow = "hidden";
-          sectionDeviceTargets.classList.remove("open");
-        }
-        caretDeviceTargets.textContent = this.showDeviceTargets ? "▾" : "▸";
-      });
     }
     const toggleZones = this.shadowRoot.getElementById("toggleZones");
     const caretZones = this.shadowRoot.getElementById("caretZones");
@@ -2365,176 +2389,14 @@ class ZoneMapCard extends HTMLElement {
       this._outsideClickHandler = null;
     }
   }
-  async _ensureRegistriesLoaded() {
-    var _a, _b;
-    try {
-      const [devices, entities] = await Promise.all([
-        this._hass.callWS({ type: "config/device_registry/list" }),
-        this._hass.callWS({ type: "config/entity_registry/list" })
-      ]);
-      this._devices = Array.isArray(devices) ? devices : [];
-      this._allEntities = Array.isArray(entities) ? entities : [];
-      if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
-        const info = this._findEntityInfo((_a = this.trackedEntities[0]) == null ? void 0 : _a.x) || this._findEntityInfo((_b = this.trackedEntities[0]) == null ? void 0 : _b.y);
-        if (info) this._selectedDeviceId = info.device_id;
-      }
-      this._renderEntitySelection();
-    } catch {
-    }
-  }
-  _setupCombobox(wrapper, options, initialValue, onChange) {
-    wrapper.innerHTML = "";
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = initialValue || "";
-    input.placeholder = "Type to search...";
-    input.autocomplete = "off";
-    const arrow = document.createElement("span");
-    arrow.className = "combo-arrow";
-    arrow.textContent = "▼";
-    const list = document.createElement("div");
-    list.className = "combo-list";
-    const renderList = (filterText = "") => {
-      list.innerHTML = "";
-      const lower = filterText.toLowerCase();
-      const filtered = options.filter((opt) => String(opt).toLowerCase().includes(lower));
-      if (filtered.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "combo-item disabled";
-        empty.textContent = "No matches";
-        list.appendChild(empty);
-      } else {
-        filtered.forEach((opt) => {
-          const item = document.createElement("div");
-          item.className = "combo-item";
-          if (opt === input.value) item.classList.add("selected");
-          item.textContent = opt;
-          item.addEventListener("click", (e) => {
-            e.stopPropagation();
-            input.value = opt;
-            onChange(opt);
-            closeList();
-          });
-          list.appendChild(item);
-        });
-      }
-    };
-    const closeList = () => {
-      list.classList.remove("open");
-    };
-    input.addEventListener("input", () => {
-      renderList(input.value);
-      if (!list.classList.contains("open")) list.classList.add("open");
-    });
-    input.addEventListener("focus", () => {
-      renderList(input.value);
-      list.classList.add("open");
-    });
-    input.addEventListener("blur", () => {
-      setTimeout(closeList, 200);
-    });
-    arrow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (list.classList.contains("open")) {
-        closeList();
-      } else {
-        input.focus();
-      }
-    });
-    wrapper.appendChild(input);
-    wrapper.appendChild(arrow);
-    wrapper.appendChild(list);
-    return { input, close: closeList };
-  }
-  _renderEntitySelection() {
-    var _a, _b;
-    const devWrapper = (_a = this.shadowRoot) == null ? void 0 : _a.getElementById("deviceComboWrapper");
-    const pairsDiv = (_b = this.shadowRoot) == null ? void 0 : _b.getElementById("entityPairs");
-    if (!devWrapper || !pairsDiv) return;
-    const allDevices = this._devices || [];
-    const ld2450DeviceIds = new Set(
-      (this._allEntities || []).filter((e) => e.entity_id && e.entity_id.toLowerCase().includes("ld2450") && e.device_id).map((e) => e.device_id)
-    );
-    const matches = allDevices.filter((d) => {
-      const model = (d.model || "").toLowerCase();
-      const name = (d.name_by_user || d.name || "").toLowerCase();
-      return model.includes("ld2450") || name.includes("ld2450") || ld2450DeviceIds.has(d.id);
-    });
-    const devices = (matches.length > 0 ? matches : allDevices).slice().sort((a, b) => {
-      const nameA = a.name_by_user || a.name || a.id;
-      const nameB = b.name_by_user || b.name || b.id;
-      return nameA.localeCompare(nameB);
-    });
-    const deviceOptions = devices.map((d) => d.name_by_user || d.name || d.id);
-    let currentDeviceLabel = "";
-    if (this._selectedDeviceId) {
-      const d = devices.find((dev) => String(dev.id) === String(this._selectedDeviceId));
-      if (d) currentDeviceLabel = d.name_by_user || d.name || d.id;
-    }
-    this._setupCombobox(devWrapper, deviceOptions, currentDeviceLabel, (val) => {
-      const device = devices.find((d) => (d.name_by_user || d.name || d.id) === val);
-      if (device) {
-        if (device.id !== this._selectedDeviceId) {
-          this._selectedDeviceId = device.id;
-          this._suggestPairsFromDevice(true);
-          this._entitiesDirty = true;
-          this._renderEntitySelection();
-        }
-      } else if (!val) {
-        this._selectedDeviceId = null;
-        this.trackedEntities = [];
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-        this.drawGrid();
-      }
-    });
-    const deviceEntities = (this._allEntities || []).filter(
-      (e) => !this._selectedDeviceId || e.device_id === this._selectedDeviceId
-    );
-    const sensorEntityIds = deviceEntities.filter((e) => e.entity_id || "").map((e) => e.entity_id).sort((a, b) => a.localeCompare(b));
-    pairsDiv.innerHTML = "";
-    const pairs = this.trackedEntities && this.trackedEntities.length ? this.trackedEntities : [];
-    pairs.forEach((pair, idx) => {
-      const row = document.createElement("div");
-      row.className = "entity-pair-row";
-      const label = document.createElement("label");
-      label.textContent = `Target ${idx + 1}`;
-      const wrapperX = document.createElement("div");
-      wrapperX.className = "combobox-wrapper";
-      this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
-        this.trackedEntities[idx].x = val;
-        this._entitiesDirty = true;
-        this.drawGrid();
-      });
-      const wrapperY = document.createElement("div");
-      wrapperY.className = "combobox-wrapper";
-      this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
-        this.trackedEntities[idx].y = val;
-        this._entitiesDirty = true;
-        this.drawGrid();
-      });
-      const rmBtn = document.createElement("button");
-      rmBtn.textContent = "Remove";
-      rmBtn.addEventListener("click", () => {
-        this.trackedEntities.splice(idx, 1);
-        this._entitiesDirty = true;
-        this._renderEntitySelection();
-        this.drawGrid();
-      });
-      row.appendChild(label);
-      row.appendChild(wrapperX);
-      row.appendChild(wrapperY);
-      row.appendChild(rmBtn);
-      pairsDiv.appendChild(row);
-    });
-    this._renderEntityStatus();
-  }
   /**
-   * Say which of the three states the pair list is in.
+   * Say which of the three states the target list is in.
    *
-   * Never configured and deliberately cleared look identical in the list (both
-   * are empty rows), and telling a user that nothing is tracked when the radar
-   * is quietly tracking its own targets is how the old card hid its state.
+   * Never configured and deliberately cleared both draw an empty canvas, and
+   * telling a user that nothing is tracked when the radar is quietly tracking
+   * its own targets is how the old card hid its state. Read only: the
+   * integration resolves the pairs and `apollo_mmwave.update_zone` overrides
+   * them.
    */
   _renderEntityStatus() {
     var _a;
@@ -2542,57 +2404,10 @@ class ZoneMapCard extends HTMLElement {
     if (!host) return;
     const configured = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
     if (this._usingSuggestedEntities) {
-      host.textContent = configured.length ? `Using this radar's own detected targets (${configured.length}). Apply to pin them.` : "This radar has no detected targets yet, and none are configured.";
+      host.textContent = configured.length ? `Using this radar's own detected targets (${configured.length}).` : "This radar has no detected targets yet, and none are configured.";
       return;
     }
-    host.textContent = configured.length ? `Tracking ${configured.length} target pair${configured.length === 1 ? "" : "s"}.` : "No targets are tracked. Add a pair, or apply an empty list to keep it that way.";
-  }
-  _findEntityInfo(entityId) {
-    if (!entityId) return null;
-    return (this._allEntities || []).find((e) => e.entity_id === entityId) || null;
-  }
-  _suggestPairsFromDevice(forceReplace = false) {
-    if (!this._selectedDeviceId) return false;
-    const list = (this._allEntities || []).filter(
-      (e) => e.device_id === this._selectedDeviceId && (e.entity_id || "")
-    );
-    const xs = list.filter(
-      (e) => /(^|[_-])x(\b|[_-])/.test(e.entity_id) || /_x$/.test(e.entity_id)
-    );
-    const ys = list.filter(
-      (e) => /(^|[_-])y(\b|[_-])/.test(e.entity_id) || /_y$/.test(e.entity_id)
-    );
-    const pairs = [];
-    const used = /* @__PURE__ */ new Set();
-    xs.forEach((xe) => {
-      const guessY = xe.entity_id.replace(/x(?!.*x)/, "y").replace(/_x(?!.*_x)/, "_y");
-      const ye = list.find((e) => e.entity_id === guessY) || ys.find((e) => !used.has(e.entity_id));
-      if (ye) {
-        used.add(ye.entity_id);
-        pairs.push({ x: xe.entity_id, y: ye.entity_id });
-      }
-    });
-    if (pairs.length === 0) {
-      const numeric = list.map((e) => e.entity_id).filter((id) => {
-        var _a;
-        const st = (_a = this._hass) == null ? void 0 : _a.states[id];
-        return st && st.state !== "unknown" && st.state !== "unavailable" && !Number.isNaN(parseFloat(st.state));
-      });
-      for (let i = 0; i + 1 < numeric.length; i += 2) {
-        pairs.push({ x: numeric[i], y: numeric[i + 1] });
-      }
-    }
-    if (pairs.length) {
-      if (forceReplace || !this.trackedEntities || this.trackedEntities.length === 0) {
-        this.trackedEntities = pairs;
-        return true;
-      }
-      return false;
-    }
-    if (forceReplace) {
-      this.trackedEntities = [];
-    }
-    return false;
+    host.textContent = configured.length ? `Tracking ${configured.length} target pair${configured.length === 1 ? "" : "s"}.` : "No targets are tracked, which is what this radar was told to do.";
   }
   _notify(message) {
     try {

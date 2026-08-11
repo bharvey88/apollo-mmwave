@@ -75,7 +75,9 @@ async function mountCard(hass: any, config: Record<string, any> = {}) {
   const card = new ZoneMapCard();
   card.setConfig({ device_id: "dev123", ...config } as any);
   (card as any).hass = hass;
-  await vi.waitFor(() => expect(hass.callWS).toHaveBeenCalled());
+  // Only the answer is worth waiting for. A card whose subscribe is refused
+  // never reaches the read, and the card's only other websocket calls (the
+  // registry lists the deleted pickers needed) are gone.
   await vi.waitFor(() =>
     expect((card as any)._zoneConfigPayload || (card as any)._loadError).toBeTruthy()
   );
@@ -98,7 +100,7 @@ describe("zone map card registration", () => {
   });
 
   it("offers a stub config under the new type, keyed by device id", () => {
-    const stub = ZoneMapCard.getStubConfig() as any;
+    const stub = ZoneMapCard.getStubConfig(fakeHass()) as any;
     expect(stub.type).toBe("custom:apollo-radar-zone-map-card");
     expect(stub).not.toHaveProperty("location");
   });
@@ -324,94 +326,49 @@ describe("zone map card target pairs", () => {
     const card = await mountCard(fakeHass({ ...ZONE_PAYLOAD, entities: chosen }));
 
     expect(card.trackedEntities).toEqual(chosen);
+    expect(card.shadowRoot.getElementById("entityStatus").textContent).toMatch(
+      /tracking 1 target pair\./i
+    );
   });
 
-  it("does not overwrite pairs the user is still editing", async () => {
+  it("takes every payload, having nothing half-typed to protect", async () => {
+    // The pair rows are gone, so there is no unsaved edit to hold a payload
+    // off any more, and the hold that used to do it is gone with them.
     const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
     const card = await mountCard(hass);
+    expect(card._entitiesDirty).toBeUndefined();
 
-    card.shadowRoot.getElementById("btnAddPair").click();
-    card.trackedEntities[0].x = "sensor.half_typed_x";
-    hass.handlers[ZONES_SUBSCRIBE][0]({ ...ZONE_PAYLOAD, entities: [] });
-
-    expect(card.trackedEntities).toEqual([{ x: "sensor.half_typed_x", y: "" }]);
-  });
-
-  it("saves an emptied pair list as a real clear, not as no change", async () => {
-    // The service treats `entities: []` as "no change", so a user who emptied
-    // the list used to get a "saved" toast and no save.
-    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [{ x: "sensor.x", y: "sensor.y" }] });
-    const card = await mountCard(hass);
-    card.trackedEntities = [];
-
-    card.shadowRoot.getElementById("btnApplyEntities").click();
-
-    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
-      device_id: "dev123",
-      clear_entities: true,
+    hass.handlers[ZONES_SUBSCRIBE][0]({
+      ...ZONE_PAYLOAD,
+      entities: [{ x: "sensor.pushed_x", y: "sensor.pushed_y" }],
     });
+
+    expect(card.trackedEntities).toEqual([{ x: "sensor.pushed_x", y: "sensor.pushed_y" }]);
   });
 
-  it("does not claim a save Home Assistant rejected", async () => {
-    // Clicking Apply while the entry is reloading used to toast "saved", clear
-    // the unsaved-edit hold, and then let the next payload revert the list.
-    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
-    const card = await mountCard(hass);
-    const toasts = notifications(card);
-    hass.callService.mockRejectedValue(new Error("Apollo mmWave is not loaded"));
-    card.shadowRoot.getElementById("btnAddPair").click();
-    card.trackedEntities[0] = { x: "sensor.x", y: "sensor.y" };
+  it("offers no pair-editing UI, only the read-only status line", async () => {
+    // The pair pickers were a hand-rolled combobox whose list closed on a
+    // 200ms blur timer, so a click held longer than that silently did nothing.
+    // Pairs are resolved by the integration and overridden by the service.
+    const card = await mountCard(fakeHass());
 
-    card.shadowRoot.getElementById("btnApplyEntities").click();
-    await vi.waitFor(() => expect(toasts).toHaveLength(1));
-
-    expect(toasts[0]).toMatch(/could not save/i);
-    expect(toasts[0]).toMatch(/not loaded/i);
-    // The hold stays, so the user's list is still theirs to retry.
-    expect(card._entitiesDirty).toBe(true);
-    expect(card.trackedEntities).toEqual([{ x: "sensor.x", y: "sensor.y" }]);
+    expect(card.shadowRoot.getElementById("btnAddPair")).toBeNull();
+    expect(card.shadowRoot.getElementById("btnApplyEntities")).toBeNull();
+    expect(card.shadowRoot.getElementById("entityPairs")).toBeNull();
+    expect(card.shadowRoot.getElementById("deviceComboWrapper")).toBeNull();
+    expect(card.shadowRoot.querySelector(".combo-list")).toBeNull();
+    expect(card.shadowRoot.getElementById("entityStatus")).toBeTruthy();
   });
 
-  it("releases the unsaved-edit hold once the save lands", async () => {
-    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
-    const card = await mountCard(hass);
-    card.shadowRoot.getElementById("btnAddPair").click();
-    card.trackedEntities[0] = { x: "sensor.x", y: "sensor.y" };
-
-    card.shadowRoot.getElementById("btnApplyEntities").click();
-    await vi.waitFor(() => expect(card._entitiesDirty).toBe(false));
-  });
-
-  it("does not hold unsaved edits past a re-attach or a config change", async () => {
-    // Nothing else clears the hold, so a user who clicked Remove out of
-    // curiosity and wandered off froze the pair list for the element's life.
+  it("never asks Home Assistant for the registries the pickers needed", async () => {
+    // Two registry list calls per card on first hass, for dropdowns that are
+    // no longer there.
     const hass = fakeHass();
-    const card = await mountCard(hass);
+    await mountCard(hass);
 
-    card.shadowRoot.getElementById("btnAddPair").click();
-    expect(card._entitiesDirty).toBe(true);
-    card.connectedCallback();
-    expect(card._entitiesDirty).toBe(false);
-
-    card.shadowRoot.getElementById("btnAddPair").click();
-    card.setConfig({ type: "custom:apollo-radar-zone-map-card", device_id: "dev123" });
-    expect(card._entitiesDirty).toBe(false);
-
-    hass.handlers[ZONES_SUBSCRIBE][0](ZONE_PAYLOAD);
-    expect(card.trackedEntities).toEqual(ZONE_PAYLOAD.suggested_entities);
-  });
-
-  it("saves chosen pairs by device id", async () => {
-    const pairs = [{ x: "sensor.x", y: "sensor.y" }];
-    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: pairs });
-    const card = await mountCard(hass);
-
-    card.shadowRoot.getElementById("btnApplyEntities").click();
-
-    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
-      device_id: "dev123",
-      entities: pairs,
-    });
+    const types = hass.callWS.mock.calls.map((call: any[]) => call[0].type);
+    expect(types).not.toContain("config/device_registry/list");
+    expect(types).not.toContain("config/entity_registry/list");
   });
 });
 

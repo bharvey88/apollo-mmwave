@@ -18,9 +18,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -208,6 +213,8 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         self._zone_id = zone_id
         self._attr_is_on = False
         self._unsub_state_listener: Callable[[], None] | None = None
+        self._fallback_pairs: list[dict[str, str]] | None = None
+        self._tracked_ids: frozenset[str] = frozenset()
 
         self._attr_name = f"Zone {zone_id} presence"
         self._attr_unique_id = f"{device_id}_zone_{zone_id}_presence"
@@ -216,6 +223,14 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         # the first entity id and friendly name derived from a device-less
         # entity, which is what this rework exists to stop.
         self.device_entry = dr.async_get(hass).async_get(device_id)
+        if self.device_entry is None:
+            _LOGGER.warning(
+                "Apollo mmWave: zone %s is stored against device %s, which no"
+                " longer exists. Its presence entity will not appear on any"
+                " device page; re-draw the zone on the radar's card.",
+                zone_id,
+                device_id,
+            )
 
     async def async_added_to_hass(self) -> None:
         """Track zone updates and the device's coordinate entities."""
@@ -223,14 +238,48 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         @callback
         def _zones_updated(device_id: str) -> None:
             if device_id == self._device_id:
-                self._track_coordinate_entities()
-                self._evaluate_and_write()
+                self._refresh_tracking()
+
+        @callback
+        def _registry_updated(event: Event[Any]) -> None:
+            if self._entity_registry_change_is_ours(event.data["entity_id"]):
+                self._refresh_tracking()
+
+        @callback
+        def _started(_event: Event[Any]) -> None:
+            self._refresh_tracking()
 
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_ZONES_UPDATED, _zones_updated)
         )
+        # The radar's LD2450 entities can reach the registry after this one: a
+        # first pairing, a re-adopted device, or simply esphome setting up
+        # second. Without these two, the fallback would resolve to nothing once
+        # and the zone would read "off" forever, with nothing in the log.
+        self.async_on_remove(
+            self.hass.bus.async_listen(
+                er.EVENT_ENTITY_REGISTRY_UPDATED, _registry_updated
+            )
+        )
+        self.async_on_remove(
+            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
+        )
         self._track_coordinate_entities()
         self._evaluate_and_write(write=False)
+
+    def _entity_registry_change_is_ours(self, entity_id: str) -> bool:
+        """Whether a registry change can alter what this zone should track."""
+        if entity_id in self._tracked_ids:
+            return True
+        # A removed entity has no entry left to inspect, which is why the
+        # already-tracked case is answered first.
+        entry = er.async_get(self.hass).async_get(entity_id)
+        return entry is not None and entry.device_id == self._device_id
+
+    def _refresh_tracking(self) -> None:
+        self._fallback_pairs = None
+        self._track_coordinate_entities()
+        self._evaluate_and_write()
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop tracking coordinate entities."""
@@ -245,7 +294,14 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         # Nothing configured means the user never hand-picked coordinate
         # sensors, so fall back to whatever the radar itself reports. A stored
         # list, even a narrower one, is a deliberate choice and always wins.
-        return resolve_target_pairs(self.hass, self._device_id)
+        #
+        # Cached because this runs on every coordinate update, and the LD2450
+        # pushes several a second per target. Resolving scans the device's whole
+        # entity list with a regex for an answer that only changes when the
+        # entity registry does, so the invalidation hangs off registry events.
+        if self._fallback_pairs is None:
+            self._fallback_pairs = resolve_target_pairs(self.hass, self._device_id)
+        return self._fallback_pairs
 
     def _track_coordinate_entities(self) -> None:
         if self._unsub_state_listener:
@@ -259,6 +315,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
             for entity_id in (pair.get("x"), pair.get("y"))
             if isinstance(entity_id, str)
         ]
+        self._tracked_ids = frozenset(entity_ids)
         if entity_ids:
             self._unsub_state_listener = async_track_state_change_event(
                 self.hass, entity_ids, self._handle_coordinate_update

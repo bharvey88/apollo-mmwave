@@ -8,6 +8,7 @@ from custom_components.apollo_mmwave import get_store
 from custom_components.apollo_mmwave.const import (
     ATTR_ROTATION_DEG,
     DOMAIN,
+    EVENT_ZONE_UPDATED,
     SERVICE_UPDATE_ZONE,
     STORE_DEVICES,
     STORE_ENTITIES,
@@ -59,6 +60,19 @@ async def test_service_creates_zone_entities(hass, init_integration, device_id) 
     assert hass.states.get(sensor_id).state == "1"
     assert hass.states.get(presence_id).state == "off"
     assert get_store(hass).device(device_id)[STORE_ENTITIES] == TRACKED
+
+
+async def test_zone_update_fires_the_public_event(
+    hass, init_integration, device_id
+) -> None:
+    """The bus event is API surface, and it identifies the radar by device id."""
+    _ = init_integration
+    events = []
+    hass.bus.async_listen(EVENT_ZONE_UPDATED, events.append)
+
+    await _create_rect_zone(hass, device_id)
+
+    assert [event.data for event in events] == [{"device_id": device_id}]
 
 
 async def test_rotation_only_update_is_stored(

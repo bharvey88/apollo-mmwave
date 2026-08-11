@@ -103,8 +103,6 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
         if entry.platform != DOMAIN:
             continue
 
-        # The restore-state cache is keyed by the entity_id the state was
-        # saved under.
         attributes = _restored_attributes(hass, entry.entity_id) or {}
 
         if entry.domain != "sensor":

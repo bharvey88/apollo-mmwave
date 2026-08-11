@@ -47,16 +47,38 @@ async def test_renaming_a_zone_entity_does_not_break_it(
 
     assert hass.states.get("sensor.my_own_name") is not None
 
+    # Surviving the rename is not enough: the renamed entity has to still be
+    # wired to zone updates, which is where a re-add without re-subscription
+    # would show up.
+    get_store(hass).device(device_id)[STORE_ZONES][1] = {
+        "shape": "ellipse",
+        "data": {"cx": 0, "cy": 0, "rx": 100, "ry": 100},
+    }
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
+    await hass.async_block_till_done()
 
-async def test_zone_sensor_carries_the_device_name(
+    assert hass.states.get("sensor.my_own_name").attributes["shape"] == "ellipse"
+
+
+async def test_zone_sensor_id_and_name_come_from_the_device(
     hass, entity_registry, setup_entry_with_zone
 ) -> None:
-    """`has_entity_name` composes the radar's name with the zone's own name."""
+    """The generated entity id is device-derived, and nothing pins it."""
+    # The object id is calculated once, at registration, from the linked device.
+    # Asserting it literally is what catches a re-pinned entity_id or a lost
+    # device link, neither of which the unique-id lookups elsewhere would see.
     device_id, _ = setup_entry_with_zone
     sensor_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, f"{device_id}_zone_1"
     )
 
+    assert sensor_id == "sensor.apollo_r_pro_1_abc123_zone_1"
+    assert (
+        entity_registry.async_get_entity_id(
+            "binary_sensor", DOMAIN, f"{device_id}_zone_1_presence"
+        )
+        == "binary_sensor.apollo_r_pro_1_abc123_zone_1_presence"
+    )
     state = hass.states.get(sensor_id)
     assert state.attributes["friendly_name"] == "Apollo R_PRO-1 abc123 Zone 1"
 
@@ -99,6 +121,18 @@ async def test_zone_added_later_gets_a_sensor(
     )
 
 
+async def test_zone_on_a_missing_device_is_logged(
+    hass, init_integration, caplog
+) -> None:
+    """A zone whose device is gone degrades quietly, so say so in the log."""
+    _ = init_integration
+    get_store(hass).device("gone_forever")[STORE_ZONES][1] = dict(RECT_ZONE)
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, "gone_forever")
+    await hass.async_block_till_done()
+
+    assert "gone_forever" in caplog.text
+
+
 async def test_zones_on_two_devices_do_not_collide(
     hass, entity_registry, device_registry, init_integration, device_id
 ) -> None:
@@ -120,8 +154,13 @@ async def test_zones_on_two_devices_do_not_collide(
     async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
     await hass.async_block_till_done()
 
-    first = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{device_id}_zone_1")
-    second = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{other.id}_zone_1")
-    assert first is not None
-    assert second is not None
-    assert first != second
+    # Both are "Zone 1", so without the device link the second would land on
+    # sensor.zone_1_2. The ids have to be device-derived, not deduplicated.
+    assert (
+        entity_registry.async_get_entity_id("sensor", DOMAIN, f"{device_id}_zone_1")
+        == "sensor.apollo_r_pro_1_abc123_zone_1"
+    )
+    assert (
+        entity_registry.async_get_entity_id("sensor", DOMAIN, f"{other.id}_zone_1")
+        == "sensor.apollo_mtr_1_def456_zone_1"
+    )

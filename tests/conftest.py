@@ -12,11 +12,8 @@ from custom_components.apollo_mmwave import get_store
 from custom_components.apollo_mmwave.const import (
     DOMAIN,
     SIGNAL_ZONES_UPDATED,
-    STORE_ENTITIES,
-    STORE_LABEL,
     STORE_ZONES,
 )
-from custom_components.apollo_mmwave.store import ZoneStore
 
 if TYPE_CHECKING:
     from homeassistant.helpers.device_registry import DeviceEntry
@@ -109,14 +106,3 @@ async def setup_entry_with_zone(hass, init_integration, device_id) -> tuple[str,
     async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
     await hass.async_block_till_done()
     return device_id, init_integration
-
-
-def store_with_zone_on(hass, device_id: str, label: str = RADAR_NAME) -> ZoneStore:
-    """Return a store holding one rect zone for a device, without touching disk."""
-    store = ZoneStore(hass)
-    store.devices[device_id] = {
-        STORE_ZONES: {1: dict(RECT_ZONE)},
-        STORE_ENTITIES: [],
-        STORE_LABEL: label,
-    }
-    return store

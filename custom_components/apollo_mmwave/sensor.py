@@ -97,6 +97,14 @@ class ZoneCoordsSensor(SensorEntity):
         # the first entity id and friendly name derived from a device-less
         # entity, which is what this rework exists to stop.
         self.device_entry = dr.async_get(hass).async_get(device_id)
+        if self.device_entry is None:
+            _LOGGER.warning(
+                "Apollo mmWave: zone %s is stored against device %s, which no"
+                " longer exists. Its sensor will not appear on any device page;"
+                " re-draw the zone on the radar's card.",
+                zone_id,
+                device_id,
+            )
 
     @property
     def native_value(self) -> int:

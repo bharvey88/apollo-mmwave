@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.apollo_mmwave import get_store
+from custom_components.apollo_mmwave import binary_sensor, get_store
 from custom_components.apollo_mmwave.const import (
     ATTR_ROTATION_DEG,
     DOMAIN,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
+    STORE_ZONES,
 )
+
+from .conftest import RECT_ZONE
 
 TARGET_1 = {
     "x": "sensor.r_pro_ld2450_target_1_x",
@@ -117,3 +121,60 @@ async def test_presence_entity_attaches_to_the_device(
     entry = entity_registry.async_get(_presence_id(entity_registry, device_id))
     assert entry.device_id == device_id
     assert entry.original_name == "Zone 1 presence"
+
+
+async def test_fallback_recovers_when_target_sensors_appear_later(
+    hass, entity_registry, device_registry, init_integration, device_id
+) -> None:
+    """A radar whose entities land after ours must not sit off forever."""
+    _ = (init_integration, device_id)
+    esphome_entry = MockConfigEntry(domain="esphome", title="Apollo MTR-1 late")
+    esphome_entry.add_to_hass(hass)
+    late = device_registry.async_get_or_create(
+        config_entry_id=esphome_entry.entry_id,
+        identifiers={("esphome", "apollo_mtr_1_late")},
+        name="Apollo MTR-1 late",
+    )
+    get_store(hass).device(late.id)[STORE_ZONES][1] = dict(RECT_ZONE)
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, late.id)
+    await hass.async_block_till_done()
+    presence_id = _presence_id(entity_registry, late.id)
+    assert hass.states.get(presence_id).state == "off"
+
+    for axis in ("x", "y"):
+        entity_registry.async_get_or_create(
+            "sensor",
+            "esphome",
+            f"late1{axis}",
+            device_id=late.id,
+            suggested_object_id=f"late_ld2450_target_1_{axis}",
+        )
+    await hass.async_block_till_done()
+
+    hass.states.async_set("sensor.late_ld2450_target_1_x", "0")
+    hass.states.async_set("sensor.late_ld2450_target_1_y", "1000")
+    await hass.async_block_till_done()
+
+    assert hass.states.get(presence_id).state == "on"
+
+
+async def test_fallback_is_not_re_resolved_on_every_coordinate_update(
+    hass, entity_registry, setup_entry_with_zone, monkeypatch
+) -> None:
+    """Resolving scans the device's whole entity list; targets update constantly."""
+    device_id, _ = setup_entry_with_zone
+    resolved: list[str] = []
+    real = binary_sensor.resolve_target_pairs
+
+    def _counting(hass_, target_device_id: str) -> list[dict[str, str]]:
+        resolved.append(target_device_id)
+        return real(hass_, target_device_id)
+
+    monkeypatch.setattr(binary_sensor, "resolve_target_pairs", _counting)
+
+    for offset in range(5):
+        _set_target(hass, TARGET_1, 0, 1000 + offset)
+        await hass.async_block_till_done()
+
+    assert hass.states.get(_presence_id(entity_registry, device_id)).state == "on"
+    assert resolved == []

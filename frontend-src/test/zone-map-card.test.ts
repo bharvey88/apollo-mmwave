@@ -207,6 +207,39 @@ describe("zone map card theme", () => {
     card.hass = themedHass(true);
     expect(card.shadowRoot.querySelector("canvas")).toBe(canvasAfter);
   });
+
+  it("omits dark_mode from the stub config so a manually added card follows the theme", () => {
+    // HA's "Add Card" picker seeds a new card from this stub. A hardcoded key
+    // here would ship every manually added card as a light-mode override, on
+    // any dashboard, which is the exact bug this task exists to fix.
+    const stub = ZoneMapCard.getStubConfig(fakeHass());
+    expect(stub).not.toHaveProperty("dark_mode");
+
+    const card = new ZoneMapCard();
+    // fakeHass has no device registry, so the stub's own device_id lookup
+    // comes back empty; that lookup is not what this test is about.
+    card.setConfig({ ...stub, device_id: "dev123" } as any);
+    card.hass = themedHass(true);
+
+    expect(card.darkMode).toBe(true);
+  });
+
+  it("reverts to the theme when dark_mode is removed from a mounted card's config", () => {
+    const card = new ZoneMapCard();
+    card.setConfig({ device_id: "dev123", dark_mode: true } as any);
+    // The theme is light, but the config override still wins.
+    card.hass = themedHass(false);
+    expect(card.darkMode).toBe(true);
+
+    // Home Assistant re-calls setConfig on a live element whenever the config
+    // changes; this is what a user editing the card to delete that line looks
+    // like. Without reverting darkMode here, the render() at the end of
+    // setConfig would still paint the stale (dark) value until the next hass
+    // push happened to correct it, a wrong-theme flash on a card that is
+    // theme-following the whole time.
+    card.setConfig({ device_id: "dev123" } as any);
+    expect(card.darkMode).toBe(false);
+  });
 });
 
 describe("zone map card zone loading", () => {

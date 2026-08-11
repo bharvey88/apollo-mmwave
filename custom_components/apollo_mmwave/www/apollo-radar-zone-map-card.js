@@ -400,7 +400,9 @@ class ZoneMapCard extends HTMLElement {
   static getStubConfig(hass) {
     return {
       type: "custom:apollo-radar-zone-map-card",
-      dark_mode: false,
+      // Deliberately no dark_mode key: an explicit key here would ship every
+      // manually added card as a light-mode override, following the theme
+      // is the point of this key being absent.
       start_locked: false,
       show_undo: true,
       unit_display: false,

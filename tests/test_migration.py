@@ -1,4 +1,4 @@
-"""Migrations: legacy (pre-1.2.0) restore states, and pre-2.0 unique ids."""
+"""Migrations: legacy (pre-1.2.0) restore states, pre-2.0 unique ids, imports."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.apollo_mmwave import get_store
 from custom_components.apollo_mmwave.const import DOMAIN, STORE_ZONES
-from custom_components.apollo_mmwave.migration import async_migrate_unique_ids
+from custom_components.apollo_mmwave.migration import (
+    async_import_zone_mapper,
+    async_migrate_unique_ids,
+)
 from custom_components.apollo_mmwave.store import ZoneStore
 
 from .conftest import RADAR_NAME, setup_integration
@@ -31,6 +34,21 @@ LEGACY_ATTRS = {
     "entities": [{"x": TARGET_X, "y": TARGET_Y}],
     "rotation_deg": 15,
     "name": "Desk",
+}
+
+# zone_mapper is the standalone integration this one replaces. Its zone data
+# lives in the same place ours used to: the restore-state attributes of one
+# sensor per zone, which is what the shared card reads.
+ZONE_MAPPER_ATTRS = {
+    "shape": "rect",
+    "data": {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10},
+    "entities": [
+        {
+            "x": "sensor.kitchen_ld2450_target_1_x",
+            "y": "sensor.kitchen_ld2450_target_1_y",
+        }
+    ],
+    "rotation_deg": 30,
 }
 
 OLD_ZONE_UID = f"{DOMAIN}_{slugify(RADAR_NAME)}_zone_1"
@@ -89,6 +107,19 @@ async def _v1_store(hass, hass_storage, location: str) -> ZoneStore:
     store = ZoneStore(hass)
     assert await store.async_load() is True
     return store
+
+
+def _register_zone_mapper_zone(hass, location: str, zone_id: int) -> str:
+    """Register one sensor owned by the standalone zone_mapper integration."""
+    slug = slugify(location)
+    entry = er.async_get(hass).async_get_or_create(
+        "sensor",
+        "zone_mapper",
+        f"zone_mapper_{slug}_zone_{zone_id}",
+        suggested_object_id=f"zone_mapper_{slug}_zone_{zone_id}",
+        original_name=f"Zone Mapper {location} Zone {zone_id}",
+    )
+    return entry.entity_id
 
 
 async def test_migrates_restore_state_into_store(
@@ -520,3 +551,71 @@ async def test_unresolvable_orphans_are_left_where_they_are(
         entity_registry.async_get(old.entity_id).unique_id
         == f"{DOMAIN}_ghost_room_zone_1"
     )
+
+
+async def test_imports_zones_from_the_standalone_zone_mapper(
+    hass, entity_registry, device_registry
+) -> None:
+    """A 2-piece install carries its zones across instead of looking wiped."""
+    device = _make_radar(hass, device_registry, "Kitchen")
+    legacy = _register_zone_mapper_zone(hass, "Kitchen", 1)
+    mock_restore_cache(hass, [State(legacy, "1", ZONE_MAPPER_ATTRS)])
+    store = ZoneStore(hass)
+
+    imported = await async_import_zone_mapper(hass, store)
+
+    assert imported == 1
+    assert store.devices[device.id][STORE_ZONES][1]["shape"] == "rect"
+    assert store.devices[device.id]["rotation_deg"] == 30
+    assert entity_registry.async_get(legacy) is not None
+
+
+async def test_import_leaves_zone_mapper_entity_ids_alone(
+    hass, entity_registry
+) -> None:
+    """The other integration may still be running; do not rename its entities."""
+    legacy = _register_zone_mapper_zone(hass, "Ghost", 1)
+
+    await async_import_zone_mapper(hass, ZoneStore(hass))
+
+    assert entity_registry.async_get(legacy).entity_id == legacy
+
+
+async def test_imported_locations_colliding_on_one_device_keep_both_zones(
+    hass, esphome_device, caplog
+) -> None:
+    """A radar renamed under zone_mapper left two locations; neither may vanish."""
+    kitchen_1 = _register_zone_mapper_zone(hass, "Kitchen", 1)
+    den_1 = _register_zone_mapper_zone(hass, "Den", 1)
+    den_2 = _register_zone_mapper_zone(hass, "Den", 2)
+    # Both locations tracked the same radar's coordinate sensors, which is how a
+    # rename presents: the old name never went away.
+    tracked = {"entities": [{"x": TARGET_X, "y": TARGET_Y}]}
+    mock_restore_cache(
+        hass,
+        [
+            State(kitchen_1, "1", {**ZONE_MAPPER_ATTRS, **tracked, "name": "Couch"}),
+            State(
+                den_1,
+                "1",
+                {**ZONE_MAPPER_ATTRS, **tracked, "shape": "ellipse", "name": "Chair"},
+            ),
+            State(den_2, "1", {**ZONE_MAPPER_ATTRS, **tracked, "name": "Rug"}),
+        ],
+    )
+    store = ZoneStore(hass)
+
+    imported = await async_import_zone_mapper(hass, store)
+
+    zones = store.devices[esphome_device.id][STORE_ZONES]
+    # First writer wins, and the loser is reported rather than dropped silently.
+    assert imported == 2
+    assert zones[1]["name"] == "Couch"
+    assert zones[2]["name"] == "Rug"
+    conflicts = [
+        record.message
+        for record in caplog.records
+        if record.levelname == "WARNING" and "Kitchen" in record.message
+    ]
+    assert conflicts, "expected a warning about the conflicting zone id"
+    assert "Den" in conflicts[0]

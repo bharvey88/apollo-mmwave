@@ -542,6 +542,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cards themselves). Only the sidebar dashboard is gated by the option.
     """
     from .migration import (  # noqa: PLC0415
+        async_import_zone_mapper,
         async_migrate_legacy,
         async_migrate_unique_ids,
     )
@@ -550,6 +551,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = ZoneStore(hass)
     if not await store.async_load():
         await async_migrate_legacy(hass, store)
+        # Second, so our own data is the first writer on any zone id the two
+        # setups share. Both ran against the same radars for these users.
+        await async_import_zone_mapper(hass, store)
+        await store.async_save()
     # Before the platforms: an entity still on a pre-2.0 unique id would
     # otherwise be abandoned and recreated fresh, losing its name and area.
     await async_migrate_unique_ids(hass, store)

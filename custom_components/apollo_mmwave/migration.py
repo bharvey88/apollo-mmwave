@@ -8,6 +8,12 @@ parsing entity friendly names. 1.2.0 moved the source of truth into
 ``ZoneStore`` (``.storage/apollo_mmwave.zones``). It runs only when no store
 file exists yet.
 
+``async_import_zone_mapper`` covers the other upgrade path onto 1.2.0+: users
+who ran the two-piece ``zone_mapper`` integration plus the standalone card.
+This one imports rather than migrates, because that integration is a separate
+install that may still be running, so nothing it owns is touched. It runs in
+the same "no store file yet" window as ``async_migrate_legacy``.
+
 ``async_migrate_unique_ids`` covers the 2.0 identity change: zone entities are
 keyed by Home Assistant device id now instead of a slug of the radar's display
 name. It runs on every setup rather than once, because the zone locations it
@@ -238,6 +244,84 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
             migrated_zones,
         )
     await store.async_save()
+
+
+LEGACY_PLATFORM = "zone_mapper"
+_LEGACY_UID = re.compile(rf"^{LEGACY_PLATFORM}_(?P<slug>.+)_zone_(?P<zone>\d+)$")
+
+
+def _collect_zone_mapper_locations(
+    hass: HomeAssistant, registry: er.EntityRegistry
+) -> dict[str, list[tuple[int, dict[str, Any]]]]:
+    """Group the standalone integration's zone sensors by display location."""
+    locations: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for entity in list(registry.entities.values()):
+        if entity.platform != LEGACY_PLATFORM:
+            continue
+        match = _LEGACY_UID.match(entity.unique_id or "")
+        if not match:
+            continue
+        attributes = _restored_attributes(hass, entity.entity_id) or {}
+        # No shape means that zone's data is not in the restore cache. Our own
+        # migration keeps an empty placeholder here so the entity behind it is
+        # recreated; there is no entity of ours behind this one, so importing an
+        # empty zone would only invent one the user never drew.
+        if attributes.get(ATTR_SHAPE) is None:
+            continue
+        location = _derive_location_name(entity, match["slug"])
+        locations.setdefault(location, []).append((int(match["zone"]), attributes))
+    return locations
+
+
+async def async_import_zone_mapper(hass: HomeAssistant, store: ZoneStore) -> int:
+    """
+    Copy zones out of the standalone zone_mapper integration.
+
+    Read-only with respect to that integration: its entities keep their ids and
+    its own storage is untouched, so both can run side by side while the user
+    checks the import landed. The data lives in the restore-state cache keyed by
+    that integration's entity ids, which only exists while its registry entries
+    do, so removing it first leaves nothing to import and this returns 0.
+    """
+    locations = _collect_zone_mapper_locations(hass, er.async_get(hass))
+    # Which location contributed each zone id, per device, so a collision
+    # warning can name both sides of it.
+    sources: dict[str, dict[int, str]] = {}
+    imported = 0
+
+    for location, records in locations.items():
+        # Resolved per location, not per zone, for the reason spelled out in
+        # `async_migrate_legacy`: a location's zones belong on one device.
+        device_id = _resolve_device_id(hass, location, _location_pairs(records))
+        if device_id is None:
+            _LOGGER.warning(
+                "Apollo mmWave: could not match zone_mapper location '%s' to a"
+                " device; its zones were not imported.",
+                location,
+            )
+            continue
+        target = store.device(device_id)
+        # Zones already on the device came from our own pre-1.2 migration, which
+        # runs first and so wins any collision. Recording where they came from
+        # keeps the warning naming both real sides instead of this one twice.
+        zone_sources = sources.setdefault(
+            device_id,
+            {
+                zone_id: target.get(STORE_LABEL, location)
+                for zone_id in target[STORE_ZONES]
+            },
+        )
+        target.setdefault(STORE_LABEL, location)
+        before = len(target[STORE_ZONES])
+        # Shared with the pre-1.2 migration because the failure mode is the same:
+        # a renamed radar leaves two locations resolving onto one device, and a
+        # plain assignment would wipe the first one's geometry and zone names.
+        _merge_legacy_location(target, records, location, zone_sources)
+        imported += len(target[STORE_ZONES]) - before
+
+    if imported:
+        _LOGGER.info("Apollo mmWave: imported %d zone(s) from zone_mapper", imported)
+    return imported
 
 
 _OLD_UID = re.compile(

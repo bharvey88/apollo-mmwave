@@ -4,16 +4,18 @@
  *
  * Moved here from `custom_components/apollo_mmwave/www/zone-mapper-card.js` as
  * untyped JS, so `@ts-nocheck` above is deliberate rather than a defect: 2,650
- * lines could not be typed in the same commit that moves them. It comes off
- * section by section as Tasks 10 to 13 rewrite the config schema, the data
- * protocol and the device picker. Do not delete it wholesale, delete it when
- * the last untyped section is gone.
+ * lines could not be typed in the same commit that moves them. `@ts-nocheck`
+ * is file-level, so a section only gets typed by leaving this file: the data
+ * protocol did, into the fully typed `./api`. What is left is the drawing,
+ * the canvas and the in-card controls. Do not delete it wholesale, delete it
+ * when the last untyped section is gone.
  *
  * This copy is a fork, not a vendor drop. Fixes land here first and get
  * back-ported to ApolloAutomation/zone-mapper-card later.
  */
 
 import { registerElement } from '../register';
+import { connectZones } from './api';
 
 const COLOR = Object.freeze({
   ui: {
@@ -130,18 +132,6 @@ const UNIT_ALIASES = Object.freeze({
   feet: 'ft',
 });
 
-function slugifyLocation(value) {
-  if (!value) return '';
-  let text = String(value)
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-  text = text.replace(/[^a-z0-9]+/g, '_');
-  text = text.replace(/^_+|_+$/g, '');
-  text = text.replace(/_{2,}/g, '_');
-  return text || 'unknown';
-}
-
 export class ZoneMapCard extends HTMLElement {
   static get GRID_MIN_SPACING_PX() {
     return 40;
@@ -165,6 +155,18 @@ export class ZoneMapCard extends HTMLElement {
     this.zones = [];
     this.zoneConfig = [];
     this.selectedZone = null;
+    // Zone protocol state. The store answers over the websocket; these hold
+    // what it last said, why it could not answer, and the live subscription.
+    this._zoneConfigPayload = null;
+    this._loadError = null;
+    this._zoneConnection = null;
+    this._deviceLabel = null;
+    // null entities means the radar's own detected targets are in use. The
+    // card has to say which of the two it is showing.
+    this._usingSuggestedEntities = false;
+    // Set while the user has unsaved pair edits, so a payload arriving mid-edit
+    // (their own rotation drag will cause one) does not wipe what they typed.
+    this._entitiesDirty = false;
     // Grid defaults (mm)
     this.xMin = DEFAULT_GRID.xMin;
     this.xMax = DEFAULT_GRID.xMax;
@@ -246,10 +248,6 @@ export class ZoneMapCard extends HTMLElement {
     // that is a native HTMLElement accessor and would put a browser tooltip
     // over the whole card.
     this.cardTitle = config.title === undefined ? '' : String(config.title);
-    // The rest of the card still keys its backend calls by location string.
-    // Task 11 rewrites that protocol to use the device id; until then this
-    // bridges the two so nothing downstream reads undefined.
-    this.location = this.cardTitle || this.deviceId;
 
     this._lockConfigured = config.start_locked !== undefined;
     if (this._lockConfigured) {
@@ -290,16 +288,141 @@ export class ZoneMapCard extends HTMLElement {
   set hass(hass) {
     const firstTime = !this._hass;
     this._hass = hass;
-    if (firstTime && this.canvas) {
-      this.updateZonesFromEntities();
-    }
     if (this.canvas) {
       this.drawGrid();
     }
     if (firstTime && this._hass) {
+      // The store, not the entity registry, is where zones live now, so this
+      // does not wait for a canvas or for any entity to exist.
+      this._connectZones();
       // Load device/entity registries once on first hass injection
       this._ensureRegistriesLoaded();
     }
+  }
+
+  connectedCallback() {
+    // Home Assistant detaches and re-attaches cards as views change, and
+    // `disconnectedCallback` closed the subscription on the way out.
+    this._connectZones();
+  }
+
+  _connectZones() {
+    if (this._zoneConnection || !this._hass || !this.deviceId) return;
+    this._zoneConnection = connectZones(this._hass, this.deviceId, {
+      onConfig: (config) => this._applyZoneConfig(config),
+      onError: (message) => this._setLoadError(message),
+    });
+  }
+
+  _disconnectZones() {
+    const pending = this._zoneConnection;
+    this._zoneConnection = null;
+    if (!pending) return;
+    pending.then((dispose) => dispose()).catch(() => {
+      // connectZones reports failures through onError; there is nothing left
+      // to close if it never opened.
+    });
+  }
+
+  _setLoadError(message) {
+    if (this._loadError === message) return;
+    this._loadError = message;
+    // A full re-render, because the error state replaces the map: an empty
+    // canvas looks exactly like a radar with no zones drawn yet.
+    this.render();
+  }
+
+  /** Apply one payload from the zone API. */
+  _applyZoneConfig(config) {
+    if (!config) return;
+    this._zoneConfigPayload = config;
+    if (this._loadError !== null) {
+      this._loadError = null;
+      // Brings the canvas back, and render() re-applies the payload below.
+      this.render();
+      return;
+    }
+    this._applyZones(config);
+    this._applyRotation(config);
+    this._applyTrackedEntities(config);
+    this._deviceLabel = typeof config.label === 'string' ? config.label : null;
+    this._renderTitle();
+    this._applyAutoLock();
+    this.renderZoneButtons();
+    this._renderZoneManager();
+    this.drawGrid();
+  }
+
+  _applyZones(config) {
+    const zones = config.zones && typeof config.zones === 'object' ? config.zones : {};
+    const ids = Object.keys(zones)
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id))
+      .sort((a, b) => a - b);
+
+    this.zones = [];
+    ids.forEach((id) => {
+      const entry = zones[String(id)] || {};
+      if (entry.shape && entry.shape !== 'none' && entry.data) {
+        this.zones.push({ id, shape: entry.shape, data: entry.data });
+      }
+    });
+
+    // The zone list the buttons and the manager render. The store is
+    // authoritative, but a zone written into the card's YAML has to survive a
+    // radar that has never been drawn on.
+    const seeded = Array.isArray(this.config?.zones) ? this.config.zones : [];
+    const names = new Map();
+    seeded.forEach((zone) => {
+      const id = Number(zone?.id);
+      if (Number.isFinite(id)) names.set(id, zone.name || `Zone ${id}`);
+    });
+    ids.forEach((id) => {
+      const name = zones[String(id)]?.name;
+      names.set(id, typeof name === 'string' && name.trim() ? name : `Zone ${id}`);
+    });
+    this.zoneConfig = Array.from(names.keys())
+      .sort((a, b) => a - b)
+      .map((id) => ({ id, name: names.get(id) }));
+  }
+
+  _applyRotation(config) {
+    if (typeof config.rotation_deg !== 'number') return;
+    const nextAngle = this._clampConeAngle(Math.round(config.rotation_deg));
+    if (nextAngle !== this.coneAngleDeg) {
+      this.coneAngleDeg = nextAngle;
+      this._invalidateConeCache();
+    }
+    const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+    const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+    if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+    if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
+  }
+
+  _applyTrackedEntities(config) {
+    // Unsaved edits win. Everything else here is the store's answer.
+    if (this._entitiesDirty) return;
+    const suggested = Array.isArray(config.suggested_entities)
+      ? config.suggested_entities
+      : [];
+    if (config.entities === null || config.entities === undefined) {
+      // Never configured: the radar's own targets are what is being drawn.
+      this._usingSuggestedEntities = true;
+      this.trackedEntities = suggested.map((pair) => ({ ...pair }));
+    } else {
+      // Including an empty list. The user cleared it and wants nothing tracked,
+      // which is not the same thing as never having chosen.
+      this._usingSuggestedEntities = false;
+      this.trackedEntities = (Array.isArray(config.entities) ? config.entities : []).map(
+        (pair) => ({ ...pair }),
+      );
+    }
+    const first = this.trackedEntities[0];
+    if (!this._selectedDeviceId && first) {
+      const info = this._findEntityInfo(first.x) || this._findEntityInfo(first.y);
+      if (info) this._selectedDeviceId = info.device_id || null;
+    }
+    this._renderEntitySelection();
   }
 
   processEntityConfig(entityConfig) {
@@ -328,7 +451,45 @@ export class ZoneMapCard extends HTMLElement {
     return [];
   }
 
+  /**
+   * The heading: the card's own title, else the label the store holds.
+   *
+   * Assigned as text rather than interpolated into the template, because both
+   * of those are strings a user typed.
+   */
+  _renderTitle() {
+    const host = this.shadowRoot.getElementById('deviceTitle');
+    if (!host) return;
+    host.textContent = this.cardTitle || this._deviceLabel || '';
+  }
+
+  /**
+   * What the card shows when the store could not answer.
+   *
+   * Deliberately not a blank map: an empty canvas is indistinguishable from a
+   * radar nobody has drawn on yet, and that ambiguity is what let the old card
+   * save an empty configuration over a real one.
+   */
+  _errorTemplate() {
+    return `
+      <style>
+        :host { display: block; padding: 16px; }
+        .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius, 12px); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
+        .container.dark { background: ${COLOR.ui.darkContainerBackground}; color: ${COLOR.ui.darkContainerText}; }
+        .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
+        .load-error { font-size: 14px; color: var(--error-color, ${COLOR.canvas.defaultTarget}); }
+      </style>
+      <div class="container ${this.darkMode ? 'dark' : ''}">
+        <div class="device-title" id="deviceTitle"></div>
+        <div class="load-error" id="loadError"></div>
+      </div>
+    `;
+  }
+
   _template() {
+    if (this._loadError) {
+      return this._errorTemplate();
+    }
     const gridUnitLabel = this._unitLabel(this.gridUnits);
     const inputUnitLabel = this._unitLabel(this.inputUnits);
     const displayXMin = this._formatGridValue(this.xMin);
@@ -436,7 +597,7 @@ export class ZoneMapCard extends HTMLElement {
         @media (max-width: 520px) { .entity-row { grid-template-columns: 1fr; } }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
-        <div class="device-title">${this.cardTitle || ''}</div>
+        <div class="device-title" id="deviceTitle"></div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
           <div class="overlay-controls overlay-controls-left" id="overlayControlsLeft">
@@ -479,6 +640,7 @@ export class ZoneMapCard extends HTMLElement {
                   <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
                 </div>
                 <div id="entityPairs"></div>
+                <div class="info subtle" id="entityStatus"></div>
                 <div class="pair-actions">
                   <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
                   <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
@@ -512,14 +674,27 @@ export class ZoneMapCard extends HTMLElement {
   render() {
     this._detachGlobalListeners();
     this.shadowRoot.innerHTML = this._template();
+    this._renderTitle();
+
+    if (this._loadError) {
+      // Assigned as text, not interpolated into the markup: the message quotes
+      // a device id that came in from the card's configuration.
+      const host = this.shadowRoot.getElementById('loadError');
+      if (host) host.textContent = this._loadError;
+      this.canvas = null;
+      this.ctx = null;
+      return;
+    }
 
     this.renderZoneButtons();
     this.setupCanvas();
     this.attachEventListeners();
     this._renderEntitySelection();
     this._renderZoneManager();
-    if (this._hass) {
-      this.updateZonesFromEntities();
+    if (this._zoneConfigPayload) {
+      // A render throws the old DOM away, so the last payload the store sent
+      // has to be laid back over the new one.
+      this._applyZoneConfig(this._zoneConfigPayload);
     }
   }
 
@@ -800,6 +975,7 @@ export class ZoneMapCard extends HTMLElement {
     if (btnAddPair) {
       btnAddPair.addEventListener('click', () => {
         this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
+        this._entitiesDirty = true;
         this._renderEntitySelection();
       });
     }
@@ -809,12 +985,16 @@ export class ZoneMapCard extends HTMLElement {
       btnApplyEntities.addEventListener('click', () => {
         if (!this._hass) return;
         const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
-        this._hass.callService('apollo_mmwave', 'update_zone', {
-          location: this.location,
-          entities: pairs,
-        });
+        // An `entities: []` payload means "no change" to the service, so a user
+        // who emptied the list would get a "saved" toast and no save. Emptying
+        // it is only ever expressed as clear_entities.
+        const payload = pairs.length
+          ? { device_id: this.deviceId, entities: pairs }
+          : { device_id: this.deviceId, clear_entities: true };
+        this._hass.callService('apollo_mmwave', 'update_zone', payload);
+        this._entitiesDirty = false;
         this.drawGrid();
-        this._notify('Entity pairs saved');
+        this._notify(pairs.length ? 'Entity pairs saved' : 'Target tracking cleared');
       });
     }
 
@@ -1215,7 +1395,7 @@ export class ZoneMapCard extends HTMLElement {
   _persistRotation() {
     if (!this._hass) return;
     this._hass.callService('apollo_mmwave', 'update_zone', {
-      location: this.location,
+      device_id: this.deviceId,
       rotation_deg: this.coneAngleDeg,
     });
   }
@@ -1504,94 +1684,23 @@ export class ZoneMapCard extends HTMLElement {
     this._refreshUndoButton();
   }
 
+  /**
+   * Save one zone's geometry.
+   *
+   * The pair list is deliberately absent. Sending the card's in-memory copy on
+   * every zone edit is what erased two customers' configuration: a card that
+   * had not finished loading sent an empty one, and the service took it.
+   */
   updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
     const numericZoneId = Number(zoneId);
     if (!Number.isFinite(numericZoneId) || numericZoneId <= 0) return;
     this._hass.callService('apollo_mmwave', 'update_zone', {
-      location: this.location,
+      device_id: this.deviceId,
       zone_id: numericZoneId,
       shape,
       data,
-      entities: this.trackedEntities.filter((p) => p.x && p.y),
     });
-  }
-
-  updateZonesFromEntities() {
-    if (!this._hass) return;
-    const sanitizedDevice = slugifyLocation(this.location);
-    let restoredEntities = null;
-    let namesUpdated = false;
-    // Discover zone sensors dynamically if none are configured
-    const zoneIds = new Set((this.zoneConfig || []).map((z) => Number(z.id)));
-    if (!this.zoneConfig || this.zoneConfig.length === 0) {
-      Object.keys(this._hass.states || {}).forEach((eid) => {
-        const m = eid.match(/^sensor\.apollo_mmwave_([a-z0-9_]+)_zone_(\d+)$/);
-        if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
-      });
-      // Initialize local config based on discovery (if still empty)
-      if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
-        this.zoneConfig = Array.from(zoneIds)
-          .sort((a, b) => a - b)
-          .map((id) => ({ id, name: `Zone ${id}` }));
-        this.renderZoneButtons();
-        this._renderZoneManager();
-      }
-    }
-    // Load each zone's attributes/state
-    Array.from(zoneIds)
-      .sort((a, b) => Number(a) - Number(b))
-      .forEach((id) => {
-        const entityId = `sensor.apollo_mmwave_${sanitizedDevice}_zone_${id}`;
-        const state = this._hass.states[entityId];
-        if (!state || !state.attributes) return;
-        const attrs = state.attributes;
-        if ('shape' in attrs) {
-          const shape = attrs.shape;
-          const data = attrs.data;
-          if (data) {
-            this._upsertZone(id, shape, data);
-          } else {
-            this._removeZone(id);
-          }
-        }
-        // name propagation from backend (if present)
-        if (attrs.name) {
-          const zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
-          if (zc && zc.name !== attrs.name) {
-            zc.name = attrs.name;
-            namesUpdated = true;
-          }
-        }
-        if (typeof attrs.rotation_deg === 'number') {
-          const nextAngle = this._clampConeAngle(Math.round(attrs.rotation_deg));
-          if (nextAngle !== this.coneAngleDeg) {
-            this.coneAngleDeg = nextAngle;
-            this._invalidateConeCache();
-          }
-          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
-          if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
-          if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
-        }
-        if (Array.isArray(attrs.entities) && attrs.entities.length) {
-          restoredEntities = attrs.entities;
-        }
-      });
-    if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
-      this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
-      // Try to set selected device from first pair
-      const first = this.trackedEntities[0];
-      const eInfo = this._findEntityInfo(first?.x) || this._findEntityInfo(first?.y);
-      if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
-      this._renderEntitySelection();
-    }
-    if (namesUpdated) {
-      this.renderZoneButtons();
-      this._renderZoneManager();
-    }
-    this._applyAutoLock();
-    this.drawGrid();
   }
 
   _applyAutoLock() {
@@ -1641,7 +1750,7 @@ export class ZoneMapCard extends HTMLElement {
             return;
           }
           this._hass.callService('apollo_mmwave', 'update_zone', {
-            location: this.location,
+            device_id: this.deviceId,
             zone_id: zoneId,
             name: newName,
           });
@@ -1661,7 +1770,7 @@ export class ZoneMapCard extends HTMLElement {
             return;
           }
           this._hass.callService('apollo_mmwave', 'update_zone', {
-            location: this.location,
+            device_id: this.deviceId,
             zone_id: zoneId,
             delete: true,
           });
@@ -1698,7 +1807,7 @@ export class ZoneMapCard extends HTMLElement {
     // Persist empty zone with name so entities are created and named
     if (this._hass) {
       this._hass.callService('apollo_mmwave', 'update_zone', {
-        location: this.location,
+        device_id: this.deviceId,
         zone_id: next,
         shape: 'none',
         data: null,
@@ -2260,6 +2369,11 @@ export class ZoneMapCard extends HTMLElement {
 
   setupCanvas() {
     this.canvas = this.shadowRoot.getElementById('zoneCanvas');
+    if (!this.canvas) {
+      // The error state renders no canvas at all.
+      this.ctx = null;
+      return;
+    }
     this.ctx = this.canvas.getContext('2d');
     this.canvas.width = 800;
     this.canvas.height = 800;
@@ -2372,6 +2486,7 @@ export class ZoneMapCard extends HTMLElement {
 
   disconnectedCallback() {
     this._detachGlobalListeners();
+    this._disconnectZones();
   }
 
   _detachGlobalListeners() {
@@ -2394,7 +2509,7 @@ export class ZoneMapCard extends HTMLElement {
       ]);
       this._devices = Array.isArray(devices) ? devices : [];
       this._allEntities = Array.isArray(entities) ? entities : [];
-      // Try to pick a default device for the location if any entity matches restored pairs
+      // Pick a default device if any entity matches the pairs the store sent
       if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
         const info =
           this._findEntityInfo(this.trackedEntities[0]?.x) ||
@@ -2528,11 +2643,13 @@ export class ZoneMapCard extends HTMLElement {
         if (device.id !== this._selectedDeviceId) {
           this._selectedDeviceId = device.id;
           this._suggestPairsFromDevice(true);
+          this._entitiesDirty = true;
           this._renderEntitySelection();
         }
       } else if (!val) {
         this._selectedDeviceId = null;
         this.trackedEntities = [];
+        this._entitiesDirty = true;
         this._renderEntitySelection();
         this.drawGrid();
       }
@@ -2560,6 +2677,7 @@ export class ZoneMapCard extends HTMLElement {
       wrapperX.className = 'combobox-wrapper';
       this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
         this.trackedEntities[idx].x = val;
+        this._entitiesDirty = true;
         this.drawGrid();
       });
 
@@ -2567,6 +2685,7 @@ export class ZoneMapCard extends HTMLElement {
       wrapperY.className = 'combobox-wrapper';
       this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
         this.trackedEntities[idx].y = val;
+        this._entitiesDirty = true;
         this.drawGrid();
       });
 
@@ -2574,6 +2693,7 @@ export class ZoneMapCard extends HTMLElement {
       rmBtn.textContent = 'Remove';
       rmBtn.addEventListener('click', () => {
         this.trackedEntities.splice(idx, 1);
+        this._entitiesDirty = true;
         this._renderEntitySelection();
         this.drawGrid();
       });
@@ -2584,6 +2704,30 @@ export class ZoneMapCard extends HTMLElement {
       row.appendChild(rmBtn);
       pairsDiv.appendChild(row);
     });
+
+    this._renderEntityStatus();
+  }
+
+  /**
+   * Say which of the three states the pair list is in.
+   *
+   * Never configured and deliberately cleared look identical in the list (both
+   * are empty rows), and telling a user that nothing is tracked when the radar
+   * is quietly tracking its own targets is how the old card hid its state.
+   */
+  _renderEntityStatus() {
+    const host = this.shadowRoot?.getElementById('entityStatus');
+    if (!host) return;
+    const configured = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
+    if (this._usingSuggestedEntities) {
+      host.textContent = configured.length
+        ? `Using this radar's own detected targets (${configured.length}). Apply to pin them.`
+        : "This radar has no detected targets yet, and none are configured.";
+      return;
+    }
+    host.textContent = configured.length
+      ? `Tracking ${configured.length} target pair${configured.length === 1 ? '' : 's'}.`
+      : 'No targets are tracked. Add a pair, or apply an empty list to keep it that way.';
   }
 
   _findEntityInfo(entityId) {

@@ -8,8 +8,67 @@
  * the old one.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ZoneMapCard } from "../src/zone-map/card";
+import { CONFIG_ENTRIES_SUBSCRIBE, ZONES_GET, ZONES_SUBSCRIBE } from "../src/zone-map/api";
+
+type Handler = (message: any) => void;
+
+const ZONE_PAYLOAD = {
+  zones: {
+    "1": {
+      shape: "rect",
+      data: { x_min: 0, x_max: 1000, y_min: 0, y_max: 1000 },
+      name: "Doorway",
+    },
+  },
+  entities: null as any,
+  rotation_deg: 12,
+  label: "Office radar",
+  suggested_entities: [{ x: "sensor.a_x", y: "sensor.a_y" }],
+};
+
+/** A hass whose zone read answers from the store, never from attributes. */
+function fakeHass(payload: any = ZONE_PAYLOAD, error?: any) {
+  const handlers: Record<string, Handler[]> = {};
+  const hass: any = {
+    states: {},
+    entities: {},
+    devices: {},
+    handlers,
+    callService: vi.fn(),
+    callWS: vi.fn(async (msg: any) => {
+      if (msg.type === ZONES_GET) {
+        if (error) throw error;
+        return payload;
+      }
+      return [];
+    }),
+    connection: {
+      subscribeMessage: vi.fn(async (cb: Handler, msg: any) => {
+        if (error && msg.type === ZONES_SUBSCRIBE) throw error;
+        (handlers[msg.type] ||= []).push(cb);
+        return () => {
+          hass.closed.push(msg.type);
+        };
+      }),
+    },
+    closed: [] as string[],
+  };
+  return hass;
+}
+
+/** Attach a configured card to a hass and wait for the first payload. */
+async function mountCard(hass: any, config: Record<string, any> = {}) {
+  const card = new ZoneMapCard();
+  card.setConfig({ device_id: "dev123", ...config } as any);
+  (card as any).hass = hass;
+  await vi.waitFor(() => expect(hass.callWS).toHaveBeenCalled());
+  await vi.waitFor(() =>
+    expect((card as any)._zoneConfigPayload || (card as any)._loadError).toBeTruthy()
+  );
+  return card as any;
+}
 
 describe("zone map card registration", () => {
   it("registers under the apollo-radar namespace and not the old name", async () => {
@@ -64,5 +123,202 @@ describe("zone map card config", () => {
     const card = new ZoneMapCard();
     card.setConfig({ device_id: "abc123", title: "Kitchen" } as any);
     expect(card.hasAttribute("title")).toBe(false);
+  });
+
+  it("keeps no location string at all", () => {
+    // The location string was the backend key AND the slug the card built
+    // entity ids from. Both are gone; the device id is the only key.
+    const card = new ZoneMapCard();
+    card.setConfig({ device_id: "abc123", title: "Kitchen" } as any);
+    expect((card as any).location).toBeUndefined();
+    expect((card as any).updateZonesFromEntities).toBeUndefined();
+  });
+});
+
+describe("zone map card zone loading", () => {
+  it("reads zones from the store, not from entity attributes", async () => {
+    const hass = fakeHass();
+    // A stale zone entity carrying different geometry. The card must not look.
+    hass.states["sensor.apollo_mmwave_dev123_zone_1"] = {
+      entity_id: "sensor.apollo_mmwave_dev123_zone_1",
+      state: "off",
+      attributes: { shape: "rect", data: { x_min: -9, x_max: -8, y_min: -9, y_max: -8 } },
+    };
+
+    const card = await mountCard(hass);
+
+    expect(hass.callWS).toHaveBeenCalledWith({ type: ZONES_GET, device_id: "dev123" });
+    expect(card.zones).toEqual([
+      { id: 1, shape: "rect", data: { x_min: 0, x_max: 1000, y_min: 0, y_max: 1000 } },
+    ]);
+    expect(card.zoneConfig).toEqual([{ id: 1, name: "Doorway" }]);
+    expect(card.coneAngleDeg).toBe(12);
+  });
+
+  it("applies a pushed payload without a page reload", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+
+    hass.handlers[ZONES_SUBSCRIBE][0]({
+      ...ZONE_PAYLOAD,
+      zones: {},
+      rotation_deg: -30,
+    });
+
+    expect(card.zones).toEqual([]);
+    expect(card.coneAngleDeg).toBe(-30);
+  });
+
+  it("watches for the config entry reloading so it does not sit on stale data", async () => {
+    const hass = fakeHass();
+    await mountCard(hass);
+    const zoneSubscribes = () =>
+      hass.connection.subscribeMessage.mock.calls.filter(
+        (call: any[]) => call[1].type === ZONES_SUBSCRIBE
+      ).length;
+
+    hass.handlers[CONFIG_ENTRIES_SUBSCRIBE][0]([
+      { type: "updated", entry: { domain: "apollo_mmwave", state: "loaded" } },
+    ]);
+
+    await vi.waitFor(() => expect(zoneSubscribes()).toBe(2));
+  });
+
+  it("shows an error for an unknown device instead of an empty map", async () => {
+    const hass = fakeHass(ZONE_PAYLOAD, {
+      code: "not_found",
+      message: "No Home Assistant device with id dev123",
+    });
+
+    const card = await mountCard(hass);
+
+    expect(card._loadError).toBeTruthy();
+    // Names the id the card asked about, so the fix is obvious.
+    expect(card.shadowRoot.textContent).toContain("dev123");
+    // An empty canvas reads as "this radar has no zones yet", which is exactly
+    // the ambiguity this rework removes.
+    expect(card.shadowRoot.querySelector("canvas")).toBeNull();
+  });
+
+  it("closes its subscription when it leaves the page", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+
+    card.disconnectedCallback();
+
+    await vi.waitFor(() => expect(hass.closed).toContain(ZONES_SUBSCRIBE));
+  });
+});
+
+describe("zone map card target pairs", () => {
+  it("uses the radar's detected targets when none were ever configured", async () => {
+    const card = await mountCard(fakeHass({ ...ZONE_PAYLOAD, entities: null }));
+
+    expect(card.trackedEntities).toEqual([{ x: "sensor.a_x", y: "sensor.a_y" }]);
+    expect(card.shadowRoot.getElementById("entityStatus").textContent).toMatch(
+      /detected targets/i
+    );
+  });
+
+  it("tracks nothing when the user deliberately cleared the list", async () => {
+    // [] is not the same as null. Falling back to the suggestions here would
+    // re-enable auto-detection for the one user who switched it off.
+    const card = await mountCard(fakeHass({ ...ZONE_PAYLOAD, entities: [] }));
+
+    expect(card.trackedEntities).toEqual([]);
+    expect(card.shadowRoot.getElementById("entityStatus").textContent).toMatch(
+      /no targets/i
+    );
+  });
+
+  it("uses the saved pairs when the user chose them", async () => {
+    const chosen = [{ x: "sensor.chosen_x", y: "sensor.chosen_y" }];
+    const card = await mountCard(fakeHass({ ...ZONE_PAYLOAD, entities: chosen }));
+
+    expect(card.trackedEntities).toEqual(chosen);
+  });
+
+  it("does not overwrite pairs the user is still editing", async () => {
+    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
+    const card = await mountCard(hass);
+
+    card.shadowRoot.getElementById("btnAddPair").click();
+    card.trackedEntities[0].x = "sensor.half_typed_x";
+    hass.handlers[ZONES_SUBSCRIBE][0]({ ...ZONE_PAYLOAD, entities: [] });
+
+    expect(card.trackedEntities).toEqual([{ x: "sensor.half_typed_x", y: "" }]);
+  });
+
+  it("saves an emptied pair list as a real clear, not as no change", async () => {
+    // The service treats `entities: []` as "no change", so a user who emptied
+    // the list used to get a "saved" toast and no save.
+    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [{ x: "sensor.x", y: "sensor.y" }] });
+    const card = await mountCard(hass);
+    card.trackedEntities = [];
+
+    card.shadowRoot.getElementById("btnApplyEntities").click();
+
+    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
+      device_id: "dev123",
+      clear_entities: true,
+    });
+  });
+
+  it("saves chosen pairs by device id", async () => {
+    const pairs = [{ x: "sensor.x", y: "sensor.y" }];
+    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: pairs });
+    const card = await mountCard(hass);
+
+    card.shadowRoot.getElementById("btnApplyEntities").click();
+
+    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
+      device_id: "dev123",
+      entities: pairs,
+    });
+  });
+});
+
+describe("zone map card writes", () => {
+  it("saves a shape by device id and never carries the pair list along", async () => {
+    // Sending the card's in-memory pair list on every zone edit is what erased
+    // two customers' configuration.
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    hass.callService.mockClear();
+
+    card.updateHomeAssistantShape(1, "rect", { x_min: 0, x_max: 1, y_min: 0, y_max: 1 });
+
+    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
+      device_id: "dev123",
+      zone_id: 1,
+      shape: "rect",
+      data: { x_min: 0, x_max: 1, y_min: 0, y_max: 1 },
+    });
+  });
+
+  it("persists rotation by device id", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    hass.callService.mockClear();
+    card.coneAngleDeg = 45;
+
+    card._persistRotation();
+
+    expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
+      device_id: "dev123",
+      rotation_deg: 45,
+    });
+  });
+
+  it("adds a zone by device id", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    hass.callService.mockClear();
+
+    card._handleAddZone();
+
+    const payload = hass.callService.mock.calls[0][2];
+    expect(payload.device_id).toBe("dev123");
+    expect(payload).not.toHaveProperty("location");
   });
 });

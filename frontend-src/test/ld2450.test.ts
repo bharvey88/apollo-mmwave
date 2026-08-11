@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  hasLd2450Device,
-  ld2450PairsFromDevice,
-  ld2450TargetPairs,
-} from "../src/ld2450";
+import { hasLd2450Device, ld2450TargetPairs } from "../src/ld2450";
 import type { HomeAssistant, HassEntity } from "../src/types";
 
 function hassWith(entityIds: string[], deviceId = "dev1"): HomeAssistant {
@@ -16,38 +12,10 @@ function hassWith(entityIds: string[], deviceId = "dev1"): HomeAssistant {
   return { states, entities, devices: { [deviceId]: { name: "R-PRO" } } };
 }
 
-describe("ld2450PairsFromDevice", () => {
-  it("pairs X/Y sensors by target number from actual entities", () => {
-    const hass = hassWith([
-      "sensor.office_ld2450_target_1_x",
-      "sensor.office_ld2450_target_1_y",
-      "sensor.office_ld2450_target_2_x",
-      "sensor.office_ld2450_target_2_y",
-    ]);
-    expect(ld2450PairsFromDevice(hass, "dev1")).toEqual([
-      { x: "sensor.office_ld2450_target_1_x", y: "sensor.office_ld2450_target_1_y" },
-      { x: "sensor.office_ld2450_target_2_x", y: "sensor.office_ld2450_target_2_y" },
-    ]);
-  });
-
-  it("tolerates dedup suffixes and renamed prefixes", () => {
-    // `_2` on the X sensor is HA dedup, not target 2; the pair is matched by
-    // the target number even though the prefixes differ.
-    const hass = hassWith([
-      "sensor.foo_ld2450_target_1_x_2",
-      "sensor.bar_ld2450_target_1_y",
-    ]);
-    expect(ld2450PairsFromDevice(hass, "dev1")).toEqual([
-      { x: "sensor.foo_ld2450_target_1_x_2", y: "sensor.bar_ld2450_target_1_y" },
-    ]);
-  });
-
-  it("drops targets missing their Y sensor and ignores other devices", () => {
-    const hass = hassWith(["sensor.office_ld2450_target_3_x"]);
-    hass.entities["sensor.other_ld2450_target_1_x"] = { device_id: "dev2" };
-    expect(ld2450PairsFromDevice(hass, "dev1")).toEqual([]);
-  });
-});
+// Pairing X to Y sensors used to live here as `ld2450PairsFromDevice`. The
+// integration resolves pairs itself now and hands them to the card as
+// `suggested_entities`, so a second implementation in the frontend could only
+// disagree with the one that counts.
 
 describe("hasLd2450Device", () => {
   it("is true when the device has any target X sensor", () => {

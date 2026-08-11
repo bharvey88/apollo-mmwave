@@ -20,6 +20,94 @@ function registerElement(tag, ctor) {
     window.customElements.whenDefined(marker).then(reassertAll, () => void 0);
   }
 }
+const DOMAIN = "apollo_mmwave";
+const ZONES_GET = `${DOMAIN}/zones/get`;
+const ZONES_SUBSCRIBE = `${DOMAIN}/zones/subscribe`;
+const CONFIG_ENTRIES_SUBSCRIBE = "config_entries/subscribe";
+async function fetchZones(hass, deviceId) {
+  return hass.callWS({ type: ZONES_GET, device_id: deviceId });
+}
+async function subscribeZones(hass, deviceId, callback) {
+  return hass.connection.subscribeMessage(callback, {
+    type: ZONES_SUBSCRIBE,
+    device_id: deviceId
+  });
+}
+async function subscribeEntryLoads(hass, callback) {
+  try {
+    return await hass.connection.subscribeMessage(
+      (changes) => {
+        const list = Array.isArray(changes) ? changes : [changes];
+        if (list.some(
+          (change) => {
+            var _a, _b;
+            return ((_a = change == null ? void 0 : change.entry) == null ? void 0 : _a.domain) === DOMAIN && ((_b = change == null ? void 0 : change.entry) == null ? void 0 : _b.state) === "loaded";
+          }
+        )) {
+          callback();
+        }
+      },
+      { type: CONFIG_ENTRIES_SUBSCRIBE }
+    );
+  } catch {
+    return null;
+  }
+}
+function describeError(error, deviceId) {
+  const code = error == null ? void 0 : error.code;
+  if (code === "not_found") {
+    return `Home Assistant has no device with id ${deviceId}. The radar was probably removed and re-added; pick it again in this card's settings.`;
+  }
+  if (code === "not_loaded") {
+    return "Apollo mmWave is not loaded, so this radar's zones cannot be read. They will come back on their own once the integration finishes loading.";
+  }
+  return (error == null ? void 0 : error.message) ? String(error.message) : "Could not read this radar's zone configuration.";
+}
+async function connectZones(hass, deviceId, handlers) {
+  let disposed = false;
+  let unsubscribeZones = null;
+  const closeZones = async () => {
+    const current = unsubscribeZones;
+    unsubscribeZones = null;
+    if (!current) return;
+    try {
+      await current();
+    } catch {
+    }
+  };
+  const open = async () => {
+    await closeZones();
+    let pushed = false;
+    try {
+      unsubscribeZones = await subscribeZones(hass, deviceId, (config2) => {
+        if (disposed) return;
+        pushed = true;
+        handlers.onConfig(config2);
+      });
+      const config = await fetchZones(hass, deviceId);
+      if (disposed || pushed) return;
+      handlers.onConfig(config);
+    } catch (error) {
+      if (disposed) return;
+      handlers.onError(describeError(error, deviceId));
+    }
+  };
+  await open();
+  const unsubscribeEntries = await subscribeEntryLoads(hass, () => {
+    if (disposed) return;
+    void open();
+  });
+  return async () => {
+    disposed = true;
+    await closeZones();
+    if (unsubscribeEntries) {
+      try {
+        await unsubscribeEntries();
+      } catch {
+      }
+    }
+  };
+}
 const COLOR = Object.freeze({
   ui: {
     lightCanvasBackground: "#ffffff",
@@ -127,14 +215,6 @@ const UNIT_ALIASES = Object.freeze({
   foot: "ft",
   feet: "ft"
 });
-function slugifyLocation(value) {
-  if (!value) return "";
-  let text = String(value).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  text = text.replace(/[^a-z0-9]+/g, "_");
-  text = text.replace(/^_+|_+$/g, "");
-  text = text.replace(/_{2,}/g, "_");
-  return text || "unknown";
-}
 class ZoneMapCard extends HTMLElement {
   static get GRID_MIN_SPACING_PX() {
     return 40;
@@ -156,6 +236,12 @@ class ZoneMapCard extends HTMLElement {
     this.zones = [];
     this.zoneConfig = [];
     this.selectedZone = null;
+    this._zoneConfigPayload = null;
+    this._loadError = null;
+    this._zoneConnection = null;
+    this._deviceLabel = null;
+    this._usingSuggestedEntities = false;
+    this._entitiesDirty = false;
     this.xMin = DEFAULT_GRID.xMin;
     this.xMax = DEFAULT_GRID.xMax;
     this.yMin = DEFAULT_GRID.yMin;
@@ -222,7 +308,6 @@ class ZoneMapCard extends HTMLElement {
     this.config = config;
     this.deviceId = String(config.device_id);
     this.cardTitle = config.title === void 0 ? "" : String(config.title);
-    this.location = this.cardTitle || this.deviceId;
     this._lockConfigured = config.start_locked !== void 0;
     if (this._lockConfigured) {
       this.isLocked = !!config.start_locked;
@@ -255,15 +340,109 @@ class ZoneMapCard extends HTMLElement {
   set hass(hass) {
     const firstTime = !this._hass;
     this._hass = hass;
-    if (firstTime && this.canvas) {
-      this.updateZonesFromEntities();
-    }
     if (this.canvas) {
       this.drawGrid();
     }
     if (firstTime && this._hass) {
+      this._connectZones();
       this._ensureRegistriesLoaded();
     }
+  }
+  connectedCallback() {
+    this._connectZones();
+  }
+  _connectZones() {
+    if (this._zoneConnection || !this._hass || !this.deviceId) return;
+    this._zoneConnection = connectZones(this._hass, this.deviceId, {
+      onConfig: (config) => this._applyZoneConfig(config),
+      onError: (message) => this._setLoadError(message)
+    });
+  }
+  _disconnectZones() {
+    const pending2 = this._zoneConnection;
+    this._zoneConnection = null;
+    if (!pending2) return;
+    pending2.then((dispose) => dispose()).catch(() => {
+    });
+  }
+  _setLoadError(message) {
+    if (this._loadError === message) return;
+    this._loadError = message;
+    this.render();
+  }
+  /** Apply one payload from the zone API. */
+  _applyZoneConfig(config) {
+    if (!config) return;
+    this._zoneConfigPayload = config;
+    if (this._loadError !== null) {
+      this._loadError = null;
+      this.render();
+      return;
+    }
+    this._applyZones(config);
+    this._applyRotation(config);
+    this._applyTrackedEntities(config);
+    this._deviceLabel = typeof config.label === "string" ? config.label : null;
+    this._renderTitle();
+    this._applyAutoLock();
+    this.renderZoneButtons();
+    this._renderZoneManager();
+    this.drawGrid();
+  }
+  _applyZones(config) {
+    var _a;
+    const zones = config.zones && typeof config.zones === "object" ? config.zones : {};
+    const ids = Object.keys(zones).map((id) => Number(id)).filter((id) => Number.isFinite(id)).sort((a, b) => a - b);
+    this.zones = [];
+    ids.forEach((id) => {
+      const entry = zones[String(id)] || {};
+      if (entry.shape && entry.shape !== "none" && entry.data) {
+        this.zones.push({ id, shape: entry.shape, data: entry.data });
+      }
+    });
+    const seeded = Array.isArray((_a = this.config) == null ? void 0 : _a.zones) ? this.config.zones : [];
+    const names = /* @__PURE__ */ new Map();
+    seeded.forEach((zone) => {
+      const id = Number(zone == null ? void 0 : zone.id);
+      if (Number.isFinite(id)) names.set(id, zone.name || `Zone ${id}`);
+    });
+    ids.forEach((id) => {
+      var _a2;
+      const name = (_a2 = zones[String(id)]) == null ? void 0 : _a2.name;
+      names.set(id, typeof name === "string" && name.trim() ? name : `Zone ${id}`);
+    });
+    this.zoneConfig = Array.from(names.keys()).sort((a, b) => a - b).map((id) => ({ id, name: names.get(id) }));
+  }
+  _applyRotation(config) {
+    if (typeof config.rotation_deg !== "number") return;
+    const nextAngle = this._clampConeAngle(Math.round(config.rotation_deg));
+    if (nextAngle !== this.coneAngleDeg) {
+      this.coneAngleDeg = nextAngle;
+      this._invalidateConeCache();
+    }
+    const angleSlider = this.shadowRoot.getElementById("coneAngleSlider");
+    const angleLabel = this.shadowRoot.getElementById("coneAngleLabel");
+    if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+    if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
+  }
+  _applyTrackedEntities(config) {
+    if (this._entitiesDirty) return;
+    const suggested = Array.isArray(config.suggested_entities) ? config.suggested_entities : [];
+    if (config.entities === null || config.entities === void 0) {
+      this._usingSuggestedEntities = true;
+      this.trackedEntities = suggested.map((pair) => ({ ...pair }));
+    } else {
+      this._usingSuggestedEntities = false;
+      this.trackedEntities = (Array.isArray(config.entities) ? config.entities : []).map(
+        (pair) => ({ ...pair })
+      );
+    }
+    const first = this.trackedEntities[0];
+    if (!this._selectedDeviceId && first) {
+      const info = this._findEntityInfo(first.x) || this._findEntityInfo(first.y);
+      if (info) this._selectedDeviceId = info.device_id || null;
+    }
+    this._renderEntitySelection();
   }
   processEntityConfig(entityConfig) {
     if (!entityConfig || !Array.isArray(entityConfig)) {
@@ -289,7 +468,43 @@ class ZoneMapCard extends HTMLElement {
     }
     return [];
   }
+  /**
+   * The heading: the card's own title, else the label the store holds.
+   *
+   * Assigned as text rather than interpolated into the template, because both
+   * of those are strings a user typed.
+   */
+  _renderTitle() {
+    const host = this.shadowRoot.getElementById("deviceTitle");
+    if (!host) return;
+    host.textContent = this.cardTitle || this._deviceLabel || "";
+  }
+  /**
+   * What the card shows when the store could not answer.
+   *
+   * Deliberately not a blank map: an empty canvas is indistinguishable from a
+   * radar nobody has drawn on yet, and that ambiguity is what let the old card
+   * save an empty configuration over a real one.
+   */
+  _errorTemplate() {
+    return `
+      <style>
+        :host { display: block; padding: 16px; }
+        .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius, 12px); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
+        .container.dark { background: ${COLOR.ui.darkContainerBackground}; color: ${COLOR.ui.darkContainerText}; }
+        .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
+        .load-error { font-size: 14px; color: var(--error-color, ${COLOR.canvas.defaultTarget}); }
+      </style>
+      <div class="container ${this.darkMode ? "dark" : ""}">
+        <div class="device-title" id="deviceTitle"></div>
+        <div class="load-error" id="loadError"></div>
+      </div>
+    `;
+  }
   _template() {
+    if (this._loadError) {
+      return this._errorTemplate();
+    }
     const gridUnitLabel = this._unitLabel(this.gridUnits);
     const inputUnitLabel = this._unitLabel(this.inputUnits);
     const displayXMin = this._formatGridValue(this.xMin);
@@ -397,7 +612,7 @@ class ZoneMapCard extends HTMLElement {
         @media (max-width: 520px) { .entity-row { grid-template-columns: 1fr; } }
       </style>
       <div class="container ${this.darkMode ? "dark" : ""}">
-        <div class="device-title">${this.cardTitle || ""}</div>
+        <div class="device-title" id="deviceTitle"></div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
           <div class="overlay-controls overlay-controls-left" id="overlayControlsLeft">
@@ -440,6 +655,7 @@ class ZoneMapCard extends HTMLElement {
                   <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
                 </div>
                 <div id="entityPairs"></div>
+                <div class="info subtle" id="entityStatus"></div>
                 <div class="pair-actions">
                   <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
                   <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
@@ -472,13 +688,21 @@ class ZoneMapCard extends HTMLElement {
   render() {
     this._detachGlobalListeners();
     this.shadowRoot.innerHTML = this._template();
+    this._renderTitle();
+    if (this._loadError) {
+      const host = this.shadowRoot.getElementById("loadError");
+      if (host) host.textContent = this._loadError;
+      this.canvas = null;
+      this.ctx = null;
+      return;
+    }
     this.renderZoneButtons();
     this.setupCanvas();
     this.attachEventListeners();
     this._renderEntitySelection();
     this._renderZoneManager();
-    if (this._hass) {
-      this.updateZonesFromEntities();
+    if (this._zoneConfigPayload) {
+      this._applyZoneConfig(this._zoneConfigPayload);
     }
   }
   renderZoneButtons() {
@@ -726,6 +950,7 @@ class ZoneMapCard extends HTMLElement {
     if (btnAddPair) {
       btnAddPair.addEventListener("click", () => {
         this.trackedEntities = [...this.trackedEntities || [], { x: "", y: "" }];
+        this._entitiesDirty = true;
         this._renderEntitySelection();
       });
     }
@@ -734,12 +959,11 @@ class ZoneMapCard extends HTMLElement {
       btnApplyEntities.addEventListener("click", () => {
         if (!this._hass) return;
         const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
-        this._hass.callService("apollo_mmwave", "update_zone", {
-          location: this.location,
-          entities: pairs
-        });
+        const payload = pairs.length ? { device_id: this.deviceId, entities: pairs } : { device_id: this.deviceId, clear_entities: true };
+        this._hass.callService("apollo_mmwave", "update_zone", payload);
+        this._entitiesDirty = false;
         this.drawGrid();
-        this._notify("Entity pairs saved");
+        this._notify(pairs.length ? "Entity pairs saved" : "Target tracking cleared");
       });
     }
     const btnAddZone = this.shadowRoot.getElementById("btnAddZone");
@@ -1095,7 +1319,7 @@ class ZoneMapCard extends HTMLElement {
   _persistRotation() {
     if (!this._hass) return;
     this._hass.callService("apollo_mmwave", "update_zone", {
-      location: this.location,
+      device_id: this.deviceId,
       rotation_deg: this.coneAngleDeg
     });
   }
@@ -1355,84 +1579,23 @@ class ZoneMapCard extends HTMLElement {
     this._notify("Undid last zone change");
     this._refreshUndoButton();
   }
+  /**
+   * Save one zone's geometry.
+   *
+   * The pair list is deliberately absent. Sending the card's in-memory copy on
+   * every zone edit is what erased two customers' configuration: a card that
+   * had not finished loading sent an empty one, and the service took it.
+   */
   updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
     const numericZoneId = Number(zoneId);
     if (!Number.isFinite(numericZoneId) || numericZoneId <= 0) return;
     this._hass.callService("apollo_mmwave", "update_zone", {
-      location: this.location,
+      device_id: this.deviceId,
       zone_id: numericZoneId,
       shape,
-      data,
-      entities: this.trackedEntities.filter((p) => p.x && p.y)
+      data
     });
-  }
-  updateZonesFromEntities() {
-    if (!this._hass) return;
-    const sanitizedDevice = slugifyLocation(this.location);
-    let restoredEntities = null;
-    let namesUpdated = false;
-    const zoneIds = new Set((this.zoneConfig || []).map((z) => Number(z.id)));
-    if (!this.zoneConfig || this.zoneConfig.length === 0) {
-      Object.keys(this._hass.states || {}).forEach((eid) => {
-        const m = eid.match(/^sensor\.apollo_mmwave_([a-z0-9_]+)_zone_(\d+)$/);
-        if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
-      });
-      if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
-        this.zoneConfig = Array.from(zoneIds).sort((a, b) => a - b).map((id) => ({ id, name: `Zone ${id}` }));
-        this.renderZoneButtons();
-        this._renderZoneManager();
-      }
-    }
-    Array.from(zoneIds).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
-      const entityId = `sensor.apollo_mmwave_${sanitizedDevice}_zone_${id}`;
-      const state = this._hass.states[entityId];
-      if (!state || !state.attributes) return;
-      const attrs = state.attributes;
-      if ("shape" in attrs) {
-        const shape = attrs.shape;
-        const data = attrs.data;
-        if (data) {
-          this._upsertZone(id, shape, data);
-        } else {
-          this._removeZone(id);
-        }
-      }
-      if (attrs.name) {
-        const zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
-        if (zc && zc.name !== attrs.name) {
-          zc.name = attrs.name;
-          namesUpdated = true;
-        }
-      }
-      if (typeof attrs.rotation_deg === "number") {
-        const nextAngle = this._clampConeAngle(Math.round(attrs.rotation_deg));
-        if (nextAngle !== this.coneAngleDeg) {
-          this.coneAngleDeg = nextAngle;
-          this._invalidateConeCache();
-        }
-        const angleSlider = this.shadowRoot.getElementById("coneAngleSlider");
-        const angleLabel = this.shadowRoot.getElementById("coneAngleLabel");
-        if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
-        if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
-      }
-      if (Array.isArray(attrs.entities) && attrs.entities.length) {
-        restoredEntities = attrs.entities;
-      }
-    });
-    if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
-      this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
-      const first = this.trackedEntities[0];
-      const eInfo = this._findEntityInfo(first == null ? void 0 : first.x) || this._findEntityInfo(first == null ? void 0 : first.y);
-      if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
-      this._renderEntitySelection();
-    }
-    if (namesUpdated) {
-      this.renderZoneButtons();
-      this._renderZoneManager();
-    }
-    this._applyAutoLock();
-    this.drawGrid();
   }
   _applyAutoLock() {
     if (this._autoLockApplied) return;
@@ -1477,7 +1640,7 @@ class ZoneMapCard extends HTMLElement {
             return;
           }
           this._hass.callService("apollo_mmwave", "update_zone", {
-            location: this.location,
+            device_id: this.deviceId,
             zone_id: zoneId,
             name: newName
           });
@@ -1495,7 +1658,7 @@ class ZoneMapCard extends HTMLElement {
             return;
           }
           this._hass.callService("apollo_mmwave", "update_zone", {
-            location: this.location,
+            device_id: this.deviceId,
             zone_id: zoneId,
             delete: true
           });
@@ -1527,7 +1690,7 @@ class ZoneMapCard extends HTMLElement {
     this.selectedZone = next;
     if (this._hass) {
       this._hass.callService("apollo_mmwave", "update_zone", {
-        location: this.location,
+        device_id: this.deviceId,
         zone_id: next,
         shape: "none",
         data: null,
@@ -2010,6 +2173,10 @@ class ZoneMapCard extends HTMLElement {
   }
   setupCanvas() {
     this.canvas = this.shadowRoot.getElementById("zoneCanvas");
+    if (!this.canvas) {
+      this.ctx = null;
+      return;
+    }
     this.ctx = this.canvas.getContext("2d");
     this.canvas.width = 800;
     this.canvas.height = 800;
@@ -2108,6 +2275,7 @@ class ZoneMapCard extends HTMLElement {
   }
   disconnectedCallback() {
     this._detachGlobalListeners();
+    this._disconnectZones();
   }
   _detachGlobalListeners() {
     if (this._onKeyDown) {
@@ -2232,11 +2400,13 @@ class ZoneMapCard extends HTMLElement {
         if (device.id !== this._selectedDeviceId) {
           this._selectedDeviceId = device.id;
           this._suggestPairsFromDevice(true);
+          this._entitiesDirty = true;
           this._renderEntitySelection();
         }
       } else if (!val) {
         this._selectedDeviceId = null;
         this.trackedEntities = [];
+        this._entitiesDirty = true;
         this._renderEntitySelection();
         this.drawGrid();
       }
@@ -2256,18 +2426,21 @@ class ZoneMapCard extends HTMLElement {
       wrapperX.className = "combobox-wrapper";
       this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
         this.trackedEntities[idx].x = val;
+        this._entitiesDirty = true;
         this.drawGrid();
       });
       const wrapperY = document.createElement("div");
       wrapperY.className = "combobox-wrapper";
       this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
         this.trackedEntities[idx].y = val;
+        this._entitiesDirty = true;
         this.drawGrid();
       });
       const rmBtn = document.createElement("button");
       rmBtn.textContent = "Remove";
       rmBtn.addEventListener("click", () => {
         this.trackedEntities.splice(idx, 1);
+        this._entitiesDirty = true;
         this._renderEntitySelection();
         this.drawGrid();
       });
@@ -2277,6 +2450,25 @@ class ZoneMapCard extends HTMLElement {
       row.appendChild(rmBtn);
       pairsDiv.appendChild(row);
     });
+    this._renderEntityStatus();
+  }
+  /**
+   * Say which of the three states the pair list is in.
+   *
+   * Never configured and deliberately cleared look identical in the list (both
+   * are empty rows), and telling a user that nothing is tracked when the radar
+   * is quietly tracking its own targets is how the old card hid its state.
+   */
+  _renderEntityStatus() {
+    var _a;
+    const host = (_a = this.shadowRoot) == null ? void 0 : _a.getElementById("entityStatus");
+    if (!host) return;
+    const configured = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
+    if (this._usingSuggestedEntities) {
+      host.textContent = configured.length ? `Using this radar's own detected targets (${configured.length}). Apply to pin them.` : "This radar has no detected targets yet, and none are configured.";
+      return;
+    }
+    host.textContent = configured.length ? `Tracking ${configured.length} target pair${configured.length === 1 ? "" : "s"}.` : "No targets are tracked. Add a pair, or apply an empty list to keep it that way.";
   }
   _findEntityInfo(entityId) {
     if (!entityId) return null;

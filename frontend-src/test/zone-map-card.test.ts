@@ -61,6 +61,13 @@ function fakeHass(payload: any = ZONE_PAYLOAD, error?: any) {
   return hass;
 }
 
+/** A fakeHass with hass.themes.darkMode set, for the theme-follow tests. */
+function themedHass(darkMode: boolean) {
+  const hass = fakeHass();
+  hass.themes = { darkMode };
+  return hass;
+}
+
 /** Collect the toasts the card raises. */
 function notifications(card: any): string[] {
   const seen: string[] = [];
@@ -146,6 +153,59 @@ describe("zone map card config", () => {
     card.setConfig({ device_id: "abc123", title: "Kitchen" } as any);
     expect((card as any).location).toBeUndefined();
     expect((card as any).updateZonesFromEntities).toBeUndefined();
+  });
+});
+
+describe("zone map card theme", () => {
+  it("follows the Home Assistant theme when dark_mode is not in the config", () => {
+    const card = new ZoneMapCard();
+    card.setConfig({ device_id: "dev123" } as any);
+
+    card.hass = themedHass(true);
+
+    expect(card.darkMode).toBe(true);
+    expect(
+      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+    ).toBe(true);
+  });
+
+  it("lets an explicit dark_mode win over the theme in both directions", () => {
+    const forcedLight = new ZoneMapCard();
+    forcedLight.setConfig({ device_id: "dev123", dark_mode: false } as any);
+    forcedLight.hass = themedHass(true);
+    expect(forcedLight.darkMode).toBe(false);
+
+    const forcedDark = new ZoneMapCard();
+    forcedDark.setConfig({ device_id: "dev123", dark_mode: true } as any);
+    forcedDark.hass = themedHass(false);
+    expect(forcedDark.darkMode).toBe(true);
+  });
+
+  it("repaints the canvas when the theme flips while mounted, not just the field", () => {
+    const card = new ZoneMapCard();
+    card.setConfig({ device_id: "dev123" } as any);
+    card.hass = themedHass(false);
+
+    const canvasBefore = card.shadowRoot.querySelector("canvas");
+    expect(
+      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+    ).toBe(false);
+
+    card.hass = themedHass(true);
+
+    const canvasAfter = card.shadowRoot.querySelector("canvas");
+    expect(card.darkMode).toBe(true);
+    expect(
+      card.shadowRoot.querySelector(".container")?.classList.contains("dark")
+    ).toBe(true);
+    // A fresh element, not the same node with a class swapped in: proves the
+    // setter actually rebuilt the canvas rather than only flipping a field.
+    expect(canvasAfter).not.toBe(canvasBefore);
+
+    // The LD2450 pushes coordinates several times a second through this same
+    // setter. A second call with no theme change must not rebuild again.
+    card.hass = themedHass(true);
+    expect(card.shadowRoot.querySelector("canvas")).toBe(canvasAfter);
   });
 });
 

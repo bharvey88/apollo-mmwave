@@ -143,6 +143,9 @@ export class ZoneMapCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     // Defaults
     this.darkMode = false;
+    // False until setConfig sees a dark_mode key. While false, darkMode
+    // follows hass.themes.darkMode instead of staying at whatever it was set to.
+    this._darkModeConfigured = false;
     this.isDrawing = false;
     this.startPoint = null;
     this._cursorPoint = null;
@@ -284,8 +287,13 @@ export class ZoneMapCard extends HTMLElement {
     this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
 
-    if (config.dark_mode !== undefined) {
+    this._darkModeConfigured = config.dark_mode !== undefined;
+    if (this._darkModeConfigured) {
       this.darkMode = !!config.dark_mode;
+    } else if (this._hass) {
+      // dark_mode was removed or was never set: fall back to whatever theme
+      // hass is already carrying, instead of leaving darkMode at a stale value.
+      this.darkMode = !!this._hass.themes?.darkMode;
     }
 
     this._applyGridConfig(config.grid);
@@ -349,6 +357,26 @@ export class ZoneMapCard extends HTMLElement {
   set hass(hass) {
     const firstTime = !this._hass;
     this._hass = hass;
+    // hass is set repeatedly, several times a second while the LD2450 pushes
+    // coordinates, so this only acts when the card is not overriding the
+    // theme AND the theme actually changed. Anything else here would redraw
+    // on every coordinate push instead of only on an actual theme flip.
+    if (!this._darkModeConfigured) {
+      const themeDark = !!hass?.themes?.darkMode;
+      if (themeDark !== this.darkMode) {
+        this.darkMode = themeDark;
+        if (this.canvas) {
+          // The palette lives in the geometry caches' draw calls, not their
+          // keys, so this is belt and suspenders with the rest of the card's
+          // cache-then-render pattern (see setConfig). A full render() is what
+          // actually repaints: it rebuilds the container element, whose
+          // "dark" class is baked into the template at render time.
+          this._invalidateGridCache();
+          this._invalidateConeCache();
+          this.render();
+        }
+      }
+    }
     if (this.canvas) {
       this.drawGrid();
     }

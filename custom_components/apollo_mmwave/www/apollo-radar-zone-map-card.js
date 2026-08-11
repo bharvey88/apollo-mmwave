@@ -351,6 +351,7 @@ class ZoneMapCard extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this.darkMode = false;
+    this._darkModeConfigured = false;
     this.isDrawing = false;
     this.startPoint = null;
     this._cursorPoint = null;
@@ -430,6 +431,7 @@ class ZoneMapCard extends HTMLElement {
     };
   }
   setConfig(config) {
+    var _a;
     if (!config.device_id) {
       throw new Error(
         "The Apollo Zone Map card needs a device_id. Set `device_id:` to the Home Assistant device id of your radar (Settings > Devices, the id in the URL), or add the card from the Apollo mmWave dashboard, which fills it in for you."
@@ -462,8 +464,11 @@ class ZoneMapCard extends HTMLElement {
     }
     this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
-    if (config.dark_mode !== void 0) {
+    this._darkModeConfigured = config.dark_mode !== void 0;
+    if (this._darkModeConfigured) {
       this.darkMode = !!config.dark_mode;
+    } else if (this._hass) {
+      this.darkMode = !!((_a = this._hass.themes) == null ? void 0 : _a.darkMode);
     }
     this._applyGridConfig(config.grid);
     this._applyConeConfig(config.cone);
@@ -510,8 +515,20 @@ class ZoneMapCard extends HTMLElement {
     this._autoLockApplied = false;
   }
   set hass(hass) {
+    var _a;
     const firstTime = !this._hass;
     this._hass = hass;
+    if (!this._darkModeConfigured) {
+      const themeDark = !!((_a = hass == null ? void 0 : hass.themes) == null ? void 0 : _a.darkMode);
+      if (themeDark !== this.darkMode) {
+        this.darkMode = themeDark;
+        if (this.canvas) {
+          this._invalidateGridCache();
+          this._invalidateConeCache();
+          this.render();
+        }
+      }
+    }
     if (this.canvas) {
       this.drawGrid();
     }

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import slugify
@@ -70,6 +71,10 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+# hass.data flag so the `location` deprecation is logged once per run. The card
+# calls update_zone on every rotation drag, which would otherwise flood the log.
+_DATA_LOCATION_WARNED = "location_deprecation_warned"
 
 
 def get_store(hass: HomeAssistant) -> ZoneStore:
@@ -279,23 +284,53 @@ def _device_id_for_label(store: ZoneStore, location: Any) -> str | None:
     return None
 
 
-def _resolve_target_device(store: ZoneStore, call: ServiceCall) -> str | None:
-    """Return the device id a call targets, or None if it names no known radar."""
-    device_id = call.data.get("device_id")
-    if isinstance(device_id, str) and device_id.strip():
-        return device_id.strip()
-
-    location = call.data.get("location")
-    if location is None:
+def _device_id_from_call(hass: HomeAssistant, call: ServiceCall) -> str | None:
+    """Read `device_id` off a call, or None if it names no real device."""
+    raw = call.data.get("device_id")
+    # An automation written with `target:` instead of `data:` arrives with
+    # device_id as a list, and hand-written YAML does that legitimately. More
+    # than one is refused rather than guessed at: a zone belongs to one radar.
+    if isinstance(raw, list):
+        if len(raw) > 1:
+            _LOGGER.warning(
+                "Apollo mmWave: update_zone was targeted at %d devices, but a zone"
+                " belongs to exactly one radar; nothing was changed.",
+                len(raw),
+            )
+            return None
+        raw = raw[0] if raw else None
+    if not isinstance(raw, str) or not raw.strip():
         _LOGGER.warning(
-            "Apollo mmWave: update_zone needs a device_id; nothing was changed."
+            "Apollo mmWave: update_zone was given an empty device_id;"
+            " nothing was changed."
         )
         return None
+    device_id = raw.strip()
+    # A stale id from a copied automation, or from a radar that was removed and
+    # re-added, would otherwise be written into the store as a phantom device:
+    # persisted forever, rendering nothing, reported as "my zones vanished".
+    if dr.async_get(hass).async_get(device_id) is None:
+        _LOGGER.warning(
+            "Apollo mmWave: update_zone device id '%s' matches no Home Assistant"
+            " device; nothing was changed.",
+            device_id,
+        )
+        return None
+    return device_id
 
-    _LOGGER.warning(
-        "Apollo mmWave: the update_zone 'location' field is deprecated and will"
-        " be removed in a future release; pass 'device_id' instead."
-    )
+
+def _device_id_for_deprecated_location(
+    hass: HomeAssistant, store: ZoneStore, call: ServiceCall
+) -> str | None:
+    """Resolve the v1 `location` alias, warning about it once per run."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if not domain_data.get(_DATA_LOCATION_WARNED):
+        domain_data[_DATA_LOCATION_WARNED] = True
+        _LOGGER.warning(
+            "Apollo mmWave: the update_zone 'location' field is deprecated and will"
+            " be removed in a future release; pass 'device_id' instead."
+        )
+    location = call.data.get("location")
     resolved = _device_id_for_label(store, location)
     if resolved is None:
         _LOGGER.warning(
@@ -306,8 +341,24 @@ def _resolve_target_device(store: ZoneStore, call: ServiceCall) -> str | None:
     return resolved
 
 
+def _resolve_target_device(
+    hass: HomeAssistant, store: ZoneStore, call: ServiceCall
+) -> str | None:
+    """Return the device id a call targets, or None if it names no known radar."""
+    if "device_id" in call.data:
+        return _device_id_from_call(hass, call)
+    if "location" in call.data:
+        return _device_id_for_deprecated_location(hass, store, call)
+    _LOGGER.warning(
+        "Apollo mmWave: update_zone needs a device_id; nothing was changed."
+    )
+    return None
+
+
 def _apply_entity_pairs(device: dict[str, Any], call: ServiceCall) -> None:
     """Write the tracked pair list, but only when the call really asks for it."""
+    # `clear_entities` wins over `entities` when a call carries both: it is the
+    # only explicit way to empty the list, so it must not be second-guessed.
     if call.data.get("clear_entities"):
         device[STORE_ENTITIES] = []
         return
@@ -321,7 +372,7 @@ def _build_update_zone_handler(
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
     async def handle_update_zone(call: ServiceCall) -> None:
         store = get_store(hass)
-        device_id = _resolve_target_device(store, call)
+        device_id = _resolve_target_device(hass, store, call)
         if device_id is None:
             return
 
@@ -391,7 +442,9 @@ UPDATE_ZONE_SERVICE_SCHEMA = vol.All(
     cv.has_at_least_one_key("device_id", "location"),
     vol.Schema(
         {
-            vol.Optional("device_id"): cv.string,
+            # A list is the shape a `target:` block produces; see
+            # `_device_id_from_call`.
+            vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
             vol.Optional("location"): cv.string,
             vol.Optional("clear_entities"): cv.boolean,
             vol.Optional("zone_id"): cv.positive_int,

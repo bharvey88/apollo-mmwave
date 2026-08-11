@@ -276,6 +276,72 @@ async def test_unresolvable_location_writes_nothing(
     assert store.devices.get(device_id, {}).get(ATTR_ROTATION_DEG) is None
 
 
+async def test_unknown_device_id_writes_nothing(hass, init_integration) -> None:
+    """A stale or copy-pasted device id must not fabricate a phantom store entry."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": "totally-bogus-device-id", ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert "totally-bogus-device-id" not in get_store(hass).devices
+
+
+async def test_device_id_accepts_the_target_block_shape(
+    hass, init_integration, device_id
+) -> None:
+    """An automation using `target:` sends device_id as a single-item list."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": [device_id], ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_store(hass).device(device_id)[ATTR_ROTATION_DEG] == 90
+
+
+async def test_targeting_several_devices_writes_nothing(
+    hass, init_integration, device_id
+) -> None:
+    """A zone belongs to exactly one radar, so a multi-device target is refused."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": [device_id, "another-device"], ATTR_ROTATION_DEG: 90},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_store(hass).devices.get(device_id, {}).get(ATTR_ROTATION_DEG) is None
+
+
+async def test_location_deprecation_is_warned_about_once(
+    hass, init_integration, device_id, caplog
+) -> None:
+    """The card rotates on every drag; the deprecation must not flood the log."""
+    _ = init_integration
+    get_store(hass).device(device_id)[STORE_LABEL] = "Office"
+
+    for angle in (10, 20, 30):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_UPDATE_ZONE,
+            {"location": "Office", ATTR_ROTATION_DEG: angle},
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+
+    assert caplog.text.count("'location' field is deprecated") == 1
+    assert get_store(hass).device(device_id)[ATTR_ROTATION_DEG] == 30
+
+
 async def test_update_zone_requires_a_target(hass, init_integration) -> None:
     """Neither `device_id` nor `location`: the schema rejects the call."""
     _ = init_integration

@@ -4,14 +4,14 @@ update_zone:
   fields:
     device_id:
       name: Radar Device
-      description: The radar these zones belong to
+      description: The radar these zones belong to. Required unless the deprecated location field is given.
       required: false
+      example: 4f8a2b1c9d3e5f70a1b2c3d4e5f60718
       selector:
-        device:
-          integration: apollo_mmwave
+        device: {}
     location:
       name: Location Name (deprecated)
-      description: "Deprecated: use device_id instead. Matches the device's stored display name from before 2.0 and will be removed in a future release."
+      description: "Deprecated: use device_id instead. Matches the device's stored display name from before 2.0 and will be removed in a future release. One of device_id or location must be given."
       required: false
       example: Office
       selector:
@@ -65,7 +65,7 @@ update_zone:
           step: 1
     entities:
       name: Tracked Entities
-      description: Optional list of x/y entity id pairs to evaluate presence. Device-wide; a non-empty list replaces the stored list. An empty list means no change, so a card that has not finished loading cannot wipe your pairs. Use clear_entities to empty the list.
+      description: Optional list of x/y entity id pairs to evaluate presence. Device-wide; a non-empty list replaces the stored list. An empty list means no change, so a card that has not finished loading cannot wipe your pairs. Use clear_entities to empty the list. Ignored when clear_entities is true.
       required: false
       selector:
         object: {}
@@ -74,7 +74,7 @@ update_zone:
         - { x: sensor.device_target_2_x, y: sensor.device_target_2_y }
     clear_entities:
       name: Clear Tracked Entities
-      description: If true, empties the tracked entity pair list for this device. The device then tracks nothing instead of falling back to its own LD2450 targets.
+      description: If true, empties the tracked entity pair list for this device. The device then tracks nothing instead of falling back to its own LD2450 targets. Takes precedence over entities, which is ignored in the same call.
       required: false
       selector:
         boolean: {}

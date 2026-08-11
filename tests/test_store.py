@@ -230,6 +230,83 @@ async def test_v1_locations_colliding_on_one_device_are_merged(
     assert "2" in conflict[0]
 
 
+async def test_v1_empty_entities_list_becomes_absent(
+    hass, hass_storage, device_registry
+) -> None:
+    """v1 seeded `entities: []` everywhere, so it cannot mean "cleared"."""
+    # Migrating it as an explicit empty would switch off the LD2450 fallback for
+    # every existing user and leave their presence sensors dead.
+    device = _make_radar(hass, device_registry, "Apollo R_PRO-1 abc123")
+    hass_storage["apollo_mmwave.zones"] = {
+        "version": 1,
+        "data": {
+            "locations": {
+                "Apollo R_PRO-1 abc123": {
+                    "zones": {"1": {"shape": "rect", "data": {}}},
+                    "entities": [],
+                }
+            }
+        },
+    }
+
+    store = ZoneStore(hass)
+    assert await store.async_load() is True
+
+    assert "entities" not in store.devices[device.id]
+
+
+async def test_v1_non_empty_entities_carry_over(
+    hass, hass_storage, device_registry, entity_registry
+) -> None:
+    """A hand-picked v1 pair list is a real choice and has to survive."""
+    device = _make_radar(hass, device_registry, "Apollo R_PRO-1 abc123")
+    entity_registry.async_get_or_create(
+        "sensor",
+        "esphome",
+        "x1",
+        device_id=device.id,
+        suggested_object_id="apollo_r_pro_1_abc123_ld2450_target_1_x",
+    )
+    hass_storage["apollo_mmwave.zones"] = {
+        "version": 1,
+        "data": {
+            "locations": {
+                "Apollo R_PRO-1 abc123": {
+                    "zones": {"1": {"shape": "rect", "data": {}}},
+                    "entities": [{"x": TARGET_X, "y": TARGET_Y}],
+                }
+            }
+        },
+    }
+
+    store = ZoneStore(hass)
+    assert await store.async_load() is True
+
+    assert store.devices[device.id]["entities"] == [{"x": TARGET_X, "y": TARGET_Y}]
+
+
+async def test_explicit_empty_entities_survive_a_round_trip(
+    hass, hass_storage, device_registry
+) -> None:
+    """A cleared list only stays cleared if it reloads empty, not absent."""
+    device = _make_radar(hass, device_registry, "Apollo R_PRO-1 abc123")
+    store = ZoneStore(hass)
+    store.devices[device.id] = {"zones": {}, "entities": []}
+    await store.async_save()
+
+    reloaded = ZoneStore(hass)
+    assert await reloaded.async_load() is True
+
+    assert reloaded.devices[device.id]["entities"] == []
+
+
+async def test_a_new_device_entry_has_no_entities_key(hass) -> None:
+    """A device nobody has configured must read as unconfigured, not cleared."""
+    store = ZoneStore(hass)
+
+    assert "entities" not in store.device("some_device_id")
+
+
 async def test_v1_merge_keeps_an_explicit_zero_rotation(
     hass, hass_storage, device_registry, entity_registry
 ) -> None:

@@ -106,6 +106,41 @@ async def test_zone_sensor_exposes_geometry(
     assert state.attributes[ATTR_ROTATION_DEG] == 90
 
 
+async def test_geometry_and_presence_agree_on_the_tracked_pairs(
+    hass, entity_registry, setup_entry_with_zone
+) -> None:
+    """The advertised pair list must be the one presence is actually using."""
+    device_id, _ = setup_entry_with_zone
+    sensor_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{device_id}_zone_1"
+    )
+    presence_id = entity_registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{device_id}_zone_1_presence"
+    )
+
+    # Never configured: both sides take the radar's own targets.
+    published = hass.states.get(sensor_id).attributes["entities"]
+    assert published == [
+        {
+            "x": f"sensor.r_pro_ld2450_target_{n}_x",
+            "y": f"sensor.r_pro_ld2450_target_{n}_y",
+        }
+        for n in (1, 2, 3)
+    ]
+    hass.states.async_set(published[0]["x"], "0")
+    hass.states.async_set(published[0]["y"], "1000")
+    await hass.async_block_till_done()
+    assert hass.states.get(presence_id).state == "on"
+
+    # Explicitly cleared: both sides track nothing.
+    get_store(hass).device(device_id)[STORE_ENTITIES] = []
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(sensor_id).attributes["entities"] == []
+    assert hass.states.get(presence_id).state == "off"
+
+
 async def test_zone_added_later_gets_a_sensor(
     hass, entity_registry, setup_entry_with_zone
 ) -> None:

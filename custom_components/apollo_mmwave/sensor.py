@@ -24,9 +24,9 @@ from .const import (
     ATTR_ROTATION_DEG,
     ATTR_SHAPE,
     SIGNAL_ZONES_UPDATED,
-    STORE_ENTITIES,
     STORE_ZONES,
 )
+from .ld2450 import effective_target_pairs
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -119,7 +119,10 @@ class ZoneCoordsSensor(SensorEntity):
         attrs: dict[str, Any] = {
             ATTR_SHAPE: zone_def.get(ATTR_SHAPE),
             ATTR_DATA: zone_def.get(ATTR_DATA),
-            "entities": device.get(STORE_ENTITIES, []),
+            # The effective list, not the stored one: publishing the raw store
+            # would advertise no pairs for a freshly drawn zone while its own
+            # presence sensor was tracking every target the radar reports.
+            "entities": effective_target_pairs(self.hass, self._store, self._device_id),
         }
         rotation = device.get(ATTR_ROTATION_DEG)
         if rotation is not None:

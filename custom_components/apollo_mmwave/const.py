@@ -15,6 +15,7 @@ SIGNAL_ZONES_UPDATED = f"{DOMAIN}_zones_updated"
 # hass.data keys
 DATA_STORE = "store"
 DATA_ASSETS_REGISTERED = "assets_registered"
+DATA_PAIR_CACHE = "ld2450_pair_cache"
 
 # Store keys (v2). Zones are keyed by Home Assistant device id, which survives
 # renames. `label` is display only and never used to build an identifier.

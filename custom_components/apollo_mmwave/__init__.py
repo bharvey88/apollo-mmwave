@@ -415,6 +415,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_migrate_legacy(hass, store)
     hass.data.setdefault(DOMAIN, {})[DATA_STORE] = store
 
+    # Before the platforms, so no entity can resolve pairs without the cache in
+    # place and then hold a stale answer.
+    from .ld2450 import async_track_target_pairs  # noqa: PLC0415
+
+    entry.async_on_unload(async_track_target_pairs(hass))
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_UPDATE_ZONE,

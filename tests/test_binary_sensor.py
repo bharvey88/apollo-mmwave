@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.apollo_mmwave import binary_sensor, get_store
+from custom_components.apollo_mmwave import get_store, ld2450
 from custom_components.apollo_mmwave.const import (
     ATTR_ROTATION_DEG,
     DOMAIN,
@@ -42,7 +42,7 @@ async def test_presence_falls_back_to_the_devices_ld2450_targets(
 ) -> None:
     """An unconfigured device still detects, using its own target sensors."""
     device_id, _ = setup_entry_with_zone
-    assert get_store(hass).device(device_id)[STORE_ENTITIES] == []
+    assert get_store(hass).device(device_id).get(STORE_ENTITIES) is None
     presence_id = _presence_id(entity_registry, device_id)
 
     _set_target(hass, TARGET_1, 0, 1000)
@@ -68,6 +68,22 @@ async def test_configured_pairs_win_over_the_fallback(
     _set_target(hass, TARGET_2, 0, 1000)
     await hass.async_block_till_done()
     assert hass.states.get(presence_id).state == "on"
+
+
+async def test_an_explicitly_cleared_list_tracks_nothing(
+    hass, entity_registry, setup_entry_with_zone
+) -> None:
+    """Clearing the pair list has to mean none, not every target on the radar."""
+    device_id, _ = setup_entry_with_zone
+    get_store(hass).device(device_id)[STORE_ENTITIES] = []
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
+    await hass.async_block_till_done()
+
+    _set_target(hass, TARGET_1, 0, 1000)
+    _set_target(hass, TARGET_2, 0, 1000)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(_presence_id(entity_registry, device_id)).state == "off"
 
 
 async def test_presence_tracks_targets_in_and_out(
@@ -164,13 +180,13 @@ async def test_fallback_is_not_re_resolved_on_every_coordinate_update(
     """Resolving scans the device's whole entity list; targets update constantly."""
     device_id, _ = setup_entry_with_zone
     resolved: list[str] = []
-    real = binary_sensor.resolve_target_pairs
+    real = ld2450.resolve_target_pairs
 
     def _counting(hass_, target_device_id: str) -> list[dict[str, str]]:
         resolved.append(target_device_id)
         return real(hass_, target_device_id)
 
-    monkeypatch.setattr(binary_sensor, "resolve_target_pairs", _counting)
+    monkeypatch.setattr(ld2450, "resolve_target_pairs", _counting)
 
     for offset in range(5):
         _set_target(hass, TARGET_1, 0, 1000 + offset)

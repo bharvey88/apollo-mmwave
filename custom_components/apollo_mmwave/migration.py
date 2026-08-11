@@ -116,7 +116,7 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
         # display name, so it goes to orphans, the same place the v1 store
         # migration puts locations it cannot resolve. Nothing here resolves a
         # device yet; that arrives with the rewrite of this module.
-        loc = store.orphans.setdefault(location, {STORE_ZONES: {}, STORE_ENTITIES: []})
+        loc = store.orphans.setdefault(location, {STORE_ZONES: {}})
         shape = attributes.get(ATTR_SHAPE)
         if shape is not None:
             zone_def: dict[str, Any] = {

@@ -14,11 +14,18 @@ in-memory shape is::
     devices = {
         "<ha_device_id>": {
             "zones": {1: {"shape": ..., "data": ..., "name": ...}, ...},
-            "entities": [{"x": "<entity_id>", "y": "<entity_id>"}, ...],
+            "entities": [{"x": "<entity_id>", "y": "<entity_id>"}, ...],  # optional
             "rotation_deg": 0,          # optional
             "label": "Apollo R_PRO-1 abc123",   # optional, display only
         },
     }
+
+``entities`` is three-valued on purpose. Absent means the user never picked
+coordinate sensors, and readers fall back to the device's own LD2450 targets.
+Present and empty means the user cleared the list, and clearing has to mean
+"track nothing" rather than "track everything". Present and non-empty is an
+explicit choice. So it is never seeded, and every reader branches on
+``is None`` rather than on truthiness.
 
 v1 keyed all of this by the device's display name. A rename orphaned the
 zones, and two devices whose names slugified alike collided on one entity id.
@@ -60,7 +67,9 @@ SAVE_DELAY_SECONDS = 2.0
 
 
 def _empty_device() -> dict[str, Any]:
-    return {STORE_ZONES: {}, STORE_ENTITIES: []}
+    # No `entities` key: a new device has never been configured, which is a
+    # different thing from having been configured with nothing.
+    return {STORE_ZONES: {}}
 
 
 def _resolve_device_id(hass: HomeAssistant, location: str, entities: Any) -> str | None:
@@ -123,9 +132,13 @@ def _merge_location(
             zones[zone_key] = zone_def
             zone_sources[zone_key] = location
     entities = raw.get(STORE_ENTITIES)
-    if entities and not target.get(STORE_ENTITIES):
+    # v1 seeded `entities: []` on every location, so it had no way to say
+    # "explicitly none" and an empty v1 list can only mean "never configured".
+    # Carrying it over as an explicit empty would switch off the LD2450 fallback
+    # for every existing user at once and leave their presence sensors dead, so
+    # only a non-empty list migrates; otherwise the key stays absent.
+    if isinstance(entities, list) and entities and target.get(STORE_ENTITIES) is None:
         target[STORE_ENTITIES] = entities
-    target.setdefault(STORE_ENTITIES, [])
     rotation = raw.get(ATTR_ROTATION_DEG)
     # 0 degrees is a configured value, distinct from absent, so this gates on
     # presence rather than truthiness like the rest of the integration does.

@@ -12,6 +12,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   CONFIG_ENTRIES_SUBSCRIBE,
+  RETRY_DELAYS_MS,
   ZONES_GET,
   ZONES_SUBSCRIBE,
   connectZones,
@@ -203,6 +204,104 @@ describe("connectZones", () => {
 
     expect(onConfig).toHaveBeenCalledWith(PAYLOAD);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("retries by itself while the integration is not loaded", async () => {
+    // The error text promises the zones come back on their own. The config
+    // entry feed is admin only, so for a non-admin mounting during a reload
+    // this retry is the only thing that keeps that promise.
+    vi.useFakeTimers();
+    try {
+      const connection = fakeConnection();
+      let attempts = 0;
+      const subscribeMessage = vi.fn(async (cb: Handler, msg: any) => {
+        if (msg.type === ZONES_SUBSCRIBE) {
+          attempts += 1;
+          if (attempts === 1) throw { code: "not_loaded", message: "not loaded" };
+        }
+        return connection.subscribeMessage(cb, msg);
+      });
+      const hass = fakeHass({ connection: { ...connection, subscribeMessage } });
+      const onConfig = vi.fn();
+      const onError = vi.fn();
+
+      await connectZones(hass, "dev123", { onConfig, onError });
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onConfig).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+
+      expect(onConfig).toHaveBeenCalledWith(PAYLOAD);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up retrying rather than hammering forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = fakeConnection();
+      const subscribeMessage = vi.fn(async (cb: Handler, msg: any) => {
+        if (msg.type === ZONES_SUBSCRIBE) {
+          throw { code: "not_loaded", message: "not loaded" };
+        }
+        return connection.subscribeMessage(cb, msg);
+      });
+      const hass = fakeHass({ connection: { ...connection, subscribeMessage } });
+
+      await connectZones(hass, "dev123", { onConfig: vi.fn(), onError: vi.fn() });
+      const total = RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+      await vi.advanceTimersByTimeAsync(total * 2);
+
+      expect(subscribeMessage.mock.calls.filter((c: any[]) => c[1].type === ZONES_SUBSCRIBE))
+        .toHaveLength(RETRY_DELAYS_MS.length + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry an error that retrying cannot fix", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = fakeConnection();
+      const subscribeMessage = vi.fn(async (cb: Handler, msg: any) => {
+        if (msg.type === ZONES_SUBSCRIBE) throw { code: "not_found", message: "gone" };
+        return connection.subscribeMessage(cb, msg);
+      });
+      const hass = fakeHass({ connection: { ...connection, subscribeMessage } });
+
+      await connectZones(hass, "dev123", { onConfig: vi.fn(), onError: vi.fn() });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(subscribeMessage.mock.calls.filter((c: any[]) => c[1].type === ZONES_SUBSCRIBE))
+        .toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a pending retry when disposed", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = fakeConnection();
+      const subscribeMessage = vi.fn(async (cb: Handler, msg: any) => {
+        if (msg.type === ZONES_SUBSCRIBE) throw { code: "not_loaded", message: "no" };
+        return connection.subscribeMessage(cb, msg);
+      });
+      const hass = fakeHass({ connection: { ...connection, subscribeMessage } });
+
+      const dispose = await connectZones(hass, "dev123", {
+        onConfig: vi.fn(),
+        onError: vi.fn(),
+      });
+      await dispose();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(subscribeMessage.mock.calls.filter((c: any[]) => c[1].type === ZONES_SUBSCRIBE))
+        .toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("closes both subscriptions when disposed", async () => {

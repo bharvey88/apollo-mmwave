@@ -45,6 +45,16 @@ export interface ZoneConfig {
 
 export type Unsubscribe = () => void | Promise<void>;
 
+/**
+ * Backoff for reopening while the integration is unloaded, in milliseconds.
+ *
+ * Bounded, because after this much the entry is not mid-reload, it is broken or
+ * disabled, and a card must not hammer the websocket forever. The config entry
+ * feed covers a reload for admins; this covers everyone else, whose only other
+ * option is a manual page reload.
+ */
+export const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 20000];
+
 /** The slice of Home Assistant this module needs. */
 export interface ZoneApiHass {
   callWS<T>(message: Record<string, any>): Promise<T>;
@@ -120,19 +130,26 @@ export async function subscribeEntryLoads(
   }
 }
 
-function describeError(error: any, deviceId: string): string {
+export const ERR_NOT_LOADED = "not_loaded";
+export const ERR_NOT_FOUND = "not_found";
+
+function describeError(error: any, deviceId: string, willRetry: boolean): string {
   const code = error?.code;
-  if (code === "not_found") {
+  if (code === ERR_NOT_FOUND) {
     return (
       `Home Assistant has no device with id ${deviceId}. The radar was probably` +
       " removed and re-added; pick it again in this card's settings."
     );
   }
-  if (code === "not_loaded") {
-    return (
-      "Apollo mmWave is not loaded, so this radar's zones cannot be read." +
-      " They will come back on their own once the integration finishes loading."
-    );
+  if (code === ERR_NOT_LOADED) {
+    // Only promise recovery while a retry is still coming. Saying the zones
+    // return on their own and then never trying again is the same kind of lie
+    // as a save toast for a save that did not happen.
+    return willRetry
+      ? "Apollo mmWave is not loaded, so this radar's zones cannot be read." +
+          " They will come back on their own once the integration finishes loading."
+      : "Apollo mmWave is still not loaded, so this radar's zones cannot be" +
+          " read. Reload the page once the integration is back.";
   }
   return error?.message
     ? String(error.message)
@@ -157,6 +174,14 @@ export async function connectZones(
 ): Promise<Unsubscribe> {
   let disposed = false;
   let unsubscribeZones: Unsubscribe | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryIndex = 0;
+
+  const cancelRetry = () => {
+    if (retryTimer === null) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  };
 
   const closeZones = async () => {
     const current = unsubscribeZones;
@@ -171,6 +196,7 @@ export async function connectZones(
   };
 
   const open = async () => {
+    cancelRetry();
     await closeZones();
     // Subscribe before reading so no change can slip through the gap between
     // the two. That means a push can beat the read, in which case the read is
@@ -183,12 +209,28 @@ export async function connectZones(
         handlers.onConfig(config);
       });
       const config = await fetchZones(hass, deviceId);
+      retryIndex = 0;
       if (disposed || pushed) return;
       handlers.onConfig(config);
     } catch (error) {
       if (disposed) return;
-      handlers.onError(describeError(error, deviceId));
+      // Only "not loaded" is worth waiting out. A device that is not in the
+      // registry will not appear because a card asked again.
+      const willRetry =
+        (error as any)?.code === ERR_NOT_LOADED && retryIndex < RETRY_DELAYS_MS.length;
+      handlers.onError(describeError(error, deviceId, willRetry));
+      if (willRetry) scheduleRetry();
     }
+  };
+
+  const scheduleRetry = () => {
+    if (disposed || retryIndex >= RETRY_DELAYS_MS.length) return;
+    const delay = RETRY_DELAYS_MS[retryIndex];
+    retryIndex += 1;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void open();
+    }, delay);
   };
 
   await open();
@@ -200,6 +242,7 @@ export async function connectZones(
 
   return async () => {
     disposed = true;
+    cancelRetry();
     await closeZones();
     if (unsubscribeEntries) {
       try {

@@ -242,7 +242,20 @@ export class ZoneMapCard extends HTMLElement {
     }
 
     this.config = config;
+    const previousDeviceId = this.deviceId;
     this.deviceId = String(config.device_id);
+    if (previousDeviceId !== this.deviceId) {
+      // Home Assistant reuses a live element and calls setConfig again when the
+      // config changes: the editor preview on every keystroke, the generated
+      // dashboard when a device is added or removed and a per-position
+      // device_id shifts. Retargeting the writes without retargeting the reads
+      // would leave the card drawing one radar and saving to another.
+      this._resetDeviceState();
+    }
+    // Whatever the user was in the middle of belongs to the config that was
+    // replaced. Nothing else clears this, and a card stuck holding it stops
+    // taking payloads for the rest of its life.
+    this._entitiesDirty = false;
     // Display only, so a user can call the card "Kitchen" and still share zone
     // data with the auto-generated dashboard. Deliberately NOT `this.title`:
     // that is a native HTMLElement accessor and would put a browser tooltip
@@ -283,6 +296,45 @@ export class ZoneMapCard extends HTMLElement {
     this._invalidateGridCache();
     this._invalidateConeCache();
     this.render();
+    // Opens the subscription for a card that was pointed at another radar, and
+    // is a no-op for one whose device did not change or that has no hass yet.
+    this._connectZones();
+  }
+
+  /**
+   * Send one update_zone call and say whether it landed.
+   *
+   * Fire and forget told users a save had happened when it had not. The call is
+   * rejected while the config entry is reloading and when the radar has left
+   * the device registry, and the next payload then reverts what they were
+   * looking at, with no error anywhere. Nothing here reports success before
+   * Home Assistant has accepted the change.
+   */
+  async _saveZoneUpdate(payload, successMessage) {
+    if (!this._hass) return false;
+    try {
+      await this._hass.callService('apollo_mmwave', 'update_zone', payload);
+    } catch (error) {
+      const reason = error?.message ? String(error.message) : 'Home Assistant rejected it.';
+      this._notify(`Could not save: ${reason}`);
+      return false;
+    }
+    if (successMessage) this._notify(successMessage);
+    return true;
+  }
+
+  /** Drop everything that belonged to the radar this card used to show. */
+  _resetDeviceState() {
+    this._disconnectZones();
+    this._zoneConfigPayload = null;
+    this._loadError = null;
+    this._deviceLabel = null;
+    this._usingSuggestedEntities = false;
+    this._entitiesDirty = false;
+    this.zones = [];
+    this.trackedEntities = [];
+    this._selectedDeviceId = null;
+    this.selectedZone = null;
   }
 
   set hass(hass) {
@@ -303,6 +355,8 @@ export class ZoneMapCard extends HTMLElement {
   connectedCallback() {
     // Home Assistant detaches and re-attaches cards as views change, and
     // `disconnectedCallback` closed the subscription on the way out.
+    // An editing session does not survive the card leaving the page either.
+    this._entitiesDirty = false;
     this._connectZones();
   }
 
@@ -982,7 +1036,7 @@ export class ZoneMapCard extends HTMLElement {
 
     const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
     if (btnApplyEntities) {
-      btnApplyEntities.addEventListener('click', () => {
+      btnApplyEntities.addEventListener('click', async () => {
         if (!this._hass) return;
         const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
         // An `entities: []` payload means "no change" to the service, so a user
@@ -991,10 +1045,14 @@ export class ZoneMapCard extends HTMLElement {
         const payload = pairs.length
           ? { device_id: this.deviceId, entities: pairs }
           : { device_id: this.deviceId, clear_entities: true };
-        this._hass.callService('apollo_mmwave', 'update_zone', payload);
-        this._entitiesDirty = false;
         this.drawGrid();
-        this._notify(pairs.length ? 'Entity pairs saved' : 'Target tracking cleared');
+        const saved = await this._saveZoneUpdate(
+          payload,
+          pairs.length ? 'Entity pairs saved' : 'Target tracking cleared',
+        );
+        // The hold stays on a rejection, so the list the user built is still
+        // theirs to retry rather than being reverted by the next payload.
+        if (saved) this._entitiesDirty = false;
       });
     }
 
@@ -1393,11 +1451,12 @@ export class ZoneMapCard extends HTMLElement {
   }
 
   _persistRotation() {
-    if (!this._hass) return;
-    this._hass.callService('apollo_mmwave', 'update_zone', {
-      device_id: this.deviceId,
-      rotation_deg: this.coneAngleDeg,
-    });
+    // No toast on success: the slider is dragged constantly and the angle is
+    // its own feedback. A rejection still has to be said out loud.
+    return this._saveZoneUpdate(
+      { device_id: this.deviceId, rotation_deg: this.coneAngleDeg },
+      null,
+    );
   }
 
   _setDrawMode(mode) {
@@ -1502,9 +1561,7 @@ export class ZoneMapCard extends HTMLElement {
     }
     this._removeZone(zoneId);
     if (notifyBackend) {
-      this.updateHomeAssistantShape(zoneId, 'none', null);
-      const label = this._zoneLabel(zoneId);
-      this._notify(`${label} cleared`);
+      this.updateHomeAssistantShape(zoneId, 'none', null, `${this._zoneLabel(zoneId)} cleared`);
     }
     if (Number(this.selectedZone) === Number(zoneId)) {
       this._resetDrawingState();
@@ -1518,10 +1575,14 @@ export class ZoneMapCard extends HTMLElement {
     this.zones = [];
     this._resetDrawingState();
     this.drawGrid();
-    zoneIds.forEach((id) => this.updateHomeAssistantShape(id, 'none', null));
-    if (zoneIds.length) {
-      this._notify('All zones cleared');
-    }
+    if (!zoneIds.length) return;
+    // One toast for the batch, and only if every zone actually cleared. A
+    // partial failure has already said which one refused.
+    Promise.all(zoneIds.map((id) => this.updateHomeAssistantShape(id, 'none', null))).then(
+      (saved) => {
+        if (saved.every(Boolean)) this._notify('All zones cleared');
+      },
+    );
   }
 
   endDrawing(e) {
@@ -1609,11 +1670,9 @@ export class ZoneMapCard extends HTMLElement {
     this._setUndoSnapshot(this._snapshotZones([zoneId]));
     this._upsertZone(zoneId, payload.shape, payload.data);
     this.drawGrid();
-    this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
-    if (zoneId !== null && zoneId !== undefined) {
-      const label = this._zoneLabel(zoneId);
-      this._notify(`${label} saved`);
-    }
+    const savedMessage =
+      zoneId === null || zoneId === undefined ? null : `${this._zoneLabel(zoneId)} saved`;
+    this.updateHomeAssistantShape(zoneId, payload.shape, payload.data, savedMessage);
     this._activeInput = null;
     this.startPoint = null;
     this._cursorPoint = null;
@@ -1671,16 +1730,22 @@ export class ZoneMapCard extends HTMLElement {
     if (!this._undoSnapshot || !this._undoSnapshot.length) return;
     const snap = this._undoSnapshot;
     this._undoSnapshot = null;
-    snap.forEach(({ zoneId, shape, data }) => {
+    const writes = snap.map(({ zoneId, shape, data }) => {
       if (shape === 'none' || !data) {
         this._removeZone(zoneId);
       } else {
         this._upsertZone(zoneId, shape, data);
       }
-      this.updateHomeAssistantShape(zoneId, shape || 'none', data == null ? null : data);
+      return this.updateHomeAssistantShape(
+        zoneId,
+        shape || 'none',
+        data == null ? null : data,
+      );
     });
     this.drawGrid();
-    this._notify('Undid last zone change');
+    Promise.all(writes).then((saved) => {
+      if (saved.every(Boolean)) this._notify('Undid last zone change');
+    });
     this._refreshUndoButton();
   }
 
@@ -1691,16 +1756,21 @@ export class ZoneMapCard extends HTMLElement {
    * every zone edit is what erased two customers' configuration: a card that
    * had not finished loading sent an empty one, and the service took it.
    */
-  updateHomeAssistantShape(zoneId, shape, data) {
-    if (!this._hass) return;
+  updateHomeAssistantShape(zoneId, shape, data, successMessage = null) {
+    if (!this._hass) return Promise.resolve(false);
     const numericZoneId = Number(zoneId);
-    if (!Number.isFinite(numericZoneId) || numericZoneId <= 0) return;
-    this._hass.callService('apollo_mmwave', 'update_zone', {
-      device_id: this.deviceId,
-      zone_id: numericZoneId,
-      shape,
-      data,
-    });
+    if (!Number.isFinite(numericZoneId) || numericZoneId <= 0) {
+      return Promise.resolve(false);
+    }
+    return this._saveZoneUpdate(
+      {
+        device_id: this.deviceId,
+        zone_id: numericZoneId,
+        shape,
+        data,
+      },
+      successMessage,
+    );
   }
 
   _applyAutoLock() {
@@ -1749,15 +1819,13 @@ export class ZoneMapCard extends HTMLElement {
             this._notify('Unable to save name: invalid zone id');
             return;
           }
-          this._hass.callService('apollo_mmwave', 'update_zone', {
-            device_id: this.deviceId,
-            zone_id: zoneId,
-            name: newName,
-          });
+          this._saveZoneUpdate(
+            { device_id: this.deviceId, zone_id: zoneId, name: newName },
+            `${this._zoneLabel(z.id)} saved`,
+          );
         }
         this.renderZoneButtons();
         this.drawGrid();
-        this._notify(`${this._zoneLabel(z.id)} saved`);
       });
 
       delBtn.addEventListener('click', () => {
@@ -1769,11 +1837,10 @@ export class ZoneMapCard extends HTMLElement {
             this._notify('Unable to delete: invalid zone id');
             return;
           }
-          this._hass.callService('apollo_mmwave', 'update_zone', {
-            device_id: this.deviceId,
-            zone_id: zoneId,
-            delete: true,
-          });
+          this._saveZoneUpdate(
+            { device_id: this.deviceId, zone_id: zoneId, delete: true },
+            `${label} deleted`,
+          );
         }
         // Remove from UI state
         this.zoneConfig = (this.zoneConfig || []).filter((zz) => String(zz.id) !== String(z.id));
@@ -1782,7 +1849,6 @@ export class ZoneMapCard extends HTMLElement {
         this.renderZoneButtons();
         this._renderZoneManager();
         this.drawGrid();
-        this._notify(`${label} deleted`);
       });
 
       row.appendChild(label);
@@ -1805,15 +1871,16 @@ export class ZoneMapCard extends HTMLElement {
     this.zoneConfig = [...(this.zoneConfig || []), newZone];
     this.selectedZone = next;
     // Persist empty zone with name so entities are created and named
-    if (this._hass) {
-      this._hass.callService('apollo_mmwave', 'update_zone', {
+    this._saveZoneUpdate(
+      {
         device_id: this.deviceId,
         zone_id: next,
         shape: 'none',
         data: null,
         name: newZone.name,
-      });
-    }
+      },
+      null,
+    );
     this.renderZoneButtons();
     this._renderZoneManager();
   }
@@ -1835,11 +1902,12 @@ export class ZoneMapCard extends HTMLElement {
       };
       this._setUndoSnapshot(this._snapshotZones([zoneId]));
       this._upsertZone(zoneId, payload.shape, payload.data);
-      this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
-      if (zoneId !== null && zoneId !== undefined) {
-        const label = this._zoneLabel(zoneId);
-        this._notify(`${label} saved`);
-      }
+      this.updateHomeAssistantShape(
+        zoneId,
+        payload.shape,
+        payload.data,
+        `${this._zoneLabel(zoneId)} saved`,
+      );
     }
     this._resetDrawingState();
     this.drawGrid();

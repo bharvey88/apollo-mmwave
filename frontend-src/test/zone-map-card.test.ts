@@ -36,17 +36,20 @@ function fakeHass(payload: any = ZONE_PAYLOAD, error?: any) {
     entities: {},
     devices: {},
     handlers,
+    // Mutable, so a test can point the store at a second radar mid-life.
+    payload,
+    error,
     callService: vi.fn(),
     callWS: vi.fn(async (msg: any) => {
       if (msg.type === ZONES_GET) {
-        if (error) throw error;
-        return payload;
+        if (hass.error) throw hass.error;
+        return hass.payload;
       }
       return [];
     }),
     connection: {
       subscribeMessage: vi.fn(async (cb: Handler, msg: any) => {
-        if (error && msg.type === ZONES_SUBSCRIBE) throw error;
+        if (hass.error && msg.type === ZONES_SUBSCRIBE) throw hass.error;
         (handlers[msg.type] ||= []).push(cb);
         return () => {
           hass.closed.push(msg.type);
@@ -56,6 +59,15 @@ function fakeHass(payload: any = ZONE_PAYLOAD, error?: any) {
     closed: [] as string[],
   };
   return hass;
+}
+
+/** Collect the toasts the card raises. */
+function notifications(card: any): string[] {
+  const seen: string[] = [];
+  card.addEventListener("hass-notification", (event: any) => {
+    seen.push(event.detail?.message);
+  });
+  return seen;
 }
 
 /** Attach a configured card to a hass and wait for the first payload. */
@@ -200,6 +212,53 @@ describe("zone map card zone loading", () => {
     expect(card.shadowRoot.querySelector("canvas")).toBeNull();
   });
 
+  it("retargets its reads when the card is pointed at another radar", async () => {
+    // Home Assistant reuses a live element and calls setConfig again whenever
+    // the config changes. A card that retargets its writes but keeps reading
+    // the old radar will save one radar's geometry into the other's store.
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    expect(card.zones).toHaveLength(1);
+
+    hass.payload = { ...ZONE_PAYLOAD, zones: {}, label: "Bedroom" };
+    card.setConfig({ type: "custom:apollo-radar-zone-map-card", device_id: "devB" });
+
+    // Nothing from the old radar may survive the retarget, not even for the
+    // round trip it takes the new one to answer.
+    expect(card.zones).toEqual([]);
+    expect(card._zoneConfigPayload).toBeNull();
+    await vi.waitFor(() =>
+      expect(hass.callWS).toHaveBeenCalledWith({ type: ZONES_GET, device_id: "devB" })
+    );
+    await vi.waitFor(() => expect(hass.closed).toContain(ZONES_SUBSCRIBE));
+    expect(card.zones).toEqual([]);
+    expect(
+      hass.connection.subscribeMessage.mock.calls.filter(
+        (call: any[]) => call[1].type === ZONES_SUBSCRIBE
+      ).at(-1)[1].device_id
+    ).toBe("devB");
+  });
+
+  it("keeps its subscription when the config changes but the radar does not", async () => {
+    // The manual card editor calls setConfig on every keystroke.
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+
+    card.setConfig({
+      type: "custom:apollo-radar-zone-map-card",
+      device_id: "dev123",
+      title: "Kitc",
+    });
+    await Promise.resolve();
+
+    expect(
+      hass.connection.subscribeMessage.mock.calls.filter(
+        (call: any[]) => call[1].type === ZONES_SUBSCRIBE
+      )
+    ).toHaveLength(1);
+    expect(card.zones).toHaveLength(1);
+  });
+
   it("closes its subscription when it leaves the page", async () => {
     const hass = fakeHass();
     const card = await mountCard(hass);
@@ -264,6 +323,55 @@ describe("zone map card target pairs", () => {
     });
   });
 
+  it("does not claim a save Home Assistant rejected", async () => {
+    // Clicking Apply while the entry is reloading used to toast "saved", clear
+    // the unsaved-edit hold, and then let the next payload revert the list.
+    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
+    const card = await mountCard(hass);
+    const toasts = notifications(card);
+    hass.callService.mockRejectedValue(new Error("Apollo mmWave is not loaded"));
+    card.shadowRoot.getElementById("btnAddPair").click();
+    card.trackedEntities[0] = { x: "sensor.x", y: "sensor.y" };
+
+    card.shadowRoot.getElementById("btnApplyEntities").click();
+    await vi.waitFor(() => expect(toasts).toHaveLength(1));
+
+    expect(toasts[0]).toMatch(/could not save/i);
+    expect(toasts[0]).toMatch(/not loaded/i);
+    // The hold stays, so the user's list is still theirs to retry.
+    expect(card._entitiesDirty).toBe(true);
+    expect(card.trackedEntities).toEqual([{ x: "sensor.x", y: "sensor.y" }]);
+  });
+
+  it("releases the unsaved-edit hold once the save lands", async () => {
+    const hass = fakeHass({ ...ZONE_PAYLOAD, entities: [] });
+    const card = await mountCard(hass);
+    card.shadowRoot.getElementById("btnAddPair").click();
+    card.trackedEntities[0] = { x: "sensor.x", y: "sensor.y" };
+
+    card.shadowRoot.getElementById("btnApplyEntities").click();
+    await vi.waitFor(() => expect(card._entitiesDirty).toBe(false));
+  });
+
+  it("does not hold unsaved edits past a re-attach or a config change", async () => {
+    // Nothing else clears the hold, so a user who clicked Remove out of
+    // curiosity and wandered off froze the pair list for the element's life.
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+
+    card.shadowRoot.getElementById("btnAddPair").click();
+    expect(card._entitiesDirty).toBe(true);
+    card.connectedCallback();
+    expect(card._entitiesDirty).toBe(false);
+
+    card.shadowRoot.getElementById("btnAddPair").click();
+    card.setConfig({ type: "custom:apollo-radar-zone-map-card", device_id: "dev123" });
+    expect(card._entitiesDirty).toBe(false);
+
+    hass.handlers[ZONES_SUBSCRIBE][0](ZONE_PAYLOAD);
+    expect(card.trackedEntities).toEqual(ZONE_PAYLOAD.suggested_entities);
+  });
+
   it("saves chosen pairs by device id", async () => {
     const pairs = [{ x: "sensor.x", y: "sensor.y" }];
     const hass = fakeHass({ ...ZONE_PAYLOAD, entities: pairs });
@@ -294,6 +402,20 @@ describe("zone map card writes", () => {
       shape: "rect",
       data: { x_min: 0, x_max: 1, y_min: 0, y_max: 1 },
     });
+  });
+
+  it("says a zone was saved only once the store took it", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    const toasts = notifications(card);
+
+    await card.updateHomeAssistantShape(1, "rect", { x_min: 0, x_max: 1 }, "Zone 1 saved");
+    expect(toasts).toEqual(["Zone 1 saved"]);
+
+    hass.callService.mockRejectedValue(new Error("no such device"));
+    await card.updateHomeAssistantShape(1, "rect", { x_min: 0, x_max: 1 }, "Zone 1 saved");
+    expect(toasts).toHaveLength(2);
+    expect(toasts[1]).toMatch(/could not save/i);
   });
 
   it("persists rotation by device id", async () => {

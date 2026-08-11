@@ -335,6 +335,19 @@ export class ZoneMapCard extends HTMLElement {
     this.trackedEntities = [];
     this._selectedDeviceId = null;
     this.selectedZone = null;
+    // The snapshot holds the OLD radar's geometry, and _performUndo writes it
+    // under whatever device the card points at when the button is clicked. A
+    // snapshot that outlives the retarget is the same cross-device overwrite as
+    // a drag, just reached through Undo. render() disables the button from here.
+    this._undoSnapshot = null;
+    // Cosmetic, but both belong to the radar that was being shown: the slider
+    // would hold the old angle and the lock the old state until the new radar
+    // answers. Both are re-applied from the new config below and from the first
+    // payload after it.
+    this.coneAngleDeg = DEFAULT_CONE.angleDeg;
+    this._invalidateConeCache();
+    this.isLocked = false;
+    this._autoLockApplied = false;
   }
 
   set hass(hass) {

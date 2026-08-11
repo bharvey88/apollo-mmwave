@@ -400,6 +400,11 @@ class ZoneMapCard extends HTMLElement {
     this.trackedEntities = [];
     this._selectedDeviceId = null;
     this.selectedZone = null;
+    this._undoSnapshot = null;
+    this.coneAngleDeg = DEFAULT_CONE.angleDeg;
+    this._invalidateConeCache();
+    this.isLocked = false;
+    this._autoLockApplied = false;
   }
   set hass(hass) {
     const firstTime = !this._hass;

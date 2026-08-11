@@ -239,6 +239,35 @@ describe("zone map card zone loading", () => {
     ).toBe("devB");
   });
 
+  it("drops undo, rotation and lock state when pointed at another radar", async () => {
+    // The undo snapshot holds the OLD radar's geometry and _performUndo writes
+    // it with whatever deviceId the card holds when the button is clicked, so a
+    // snapshot that survives a retarget is the cross-device overwrite again,
+    // reached through Undo instead of a drag.
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    card._setUndoSnapshot([
+      { zoneId: 1, shape: "rect", data: { x_min: 0, x_max: 1, y_min: 0, y_max: 1 } },
+    ]);
+    card.isLocked = true;
+    expect(card.shadowRoot.getElementById("btnUndo").disabled).toBe(false);
+    expect(card.coneAngleDeg).toBe(12);
+
+    card.setConfig({ type: "custom:apollo-radar-zone-map-card", device_id: "devB" });
+
+    expect(card._undoSnapshot).toBeNull();
+    expect(card.shadowRoot.getElementById("btnUndo").disabled).toBe(true);
+    // Not the previous radar's angle or lock for the round trip it takes the
+    // new one to answer.
+    expect(card.coneAngleDeg).toBe(0);
+    expect(card.isLocked).toBe(false);
+    expect(card._autoLockApplied).toBeFalsy();
+
+    hass.callService.mockClear();
+    card.shadowRoot.getElementById("btnUndo").click();
+    expect(hass.callService).not.toHaveBeenCalled();
+  });
+
   it("keeps its subscription when the config changes but the radar does not", async () => {
     // The manual card editor calls setConfig on every keystroke.
     const hass = fakeHass();

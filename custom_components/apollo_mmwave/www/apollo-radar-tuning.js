@@ -1490,10 +1490,11 @@ function hasLd2450Device(hass, deviceId) {
 function hasLd2450(hass, base) {
   return ld2450TargetPairs(base).some((p2) => p2.x in hass.states);
 }
-function zoneMapperCard(base, location) {
+function zoneMapCard(deviceId, title) {
   return {
-    type: "custom:zone-mapper-card",
-    location: location || base,
+    type: "custom:apollo-radar-zone-map-card",
+    device_id: deviceId,
+    title,
     unit_display: true
   };
 }
@@ -1727,7 +1728,7 @@ function cardMap(hass, dev, distanceUnit) {
   }
   if (dev.ld2450) {
     cards.zoneHeader = dev.profile ? { type: "heading", heading: "Zone Map" } : void 0;
-    cards.zoneMap = zoneMapperCard(dev.base, dev.name);
+    cards.zoneMap = zoneMapCard(dev.deviceId, dev.name);
   }
   return cards;
 }
@@ -1864,7 +1865,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "1.3.1";
+const CARD_VERSION = "2.0.0";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

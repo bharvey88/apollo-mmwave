@@ -9,16 +9,21 @@ SERVICE_UPDATE_ZONE = "update_zone"
 # Event names (public bus event, part of the integration's API surface)
 EVENT_ZONE_UPDATED = f"{DOMAIN}_zone_updated"
 
-# Internal dispatcher signal fired with the location name on any zone change.
+# Internal dispatcher signal fired with the device id on any zone change.
 SIGNAL_ZONES_UPDATED = f"{DOMAIN}_zones_updated"
 
 # hass.data keys
 DATA_STORE = "store"
 DATA_ASSETS_REGISTERED = "assets_registered"
+DATA_PAIR_CACHE = "ld2450_pair_cache"
 
-# Location store keys
+# Store keys (v2). Zones are keyed by Home Assistant device id, which survives
+# renames. `label` is display only and never used to build an identifier.
 STORE_ZONES = "zones"
 STORE_ENTITIES = "entities"
+STORE_DEVICES = "devices"
+STORE_ORPHANS = "orphans"
+STORE_LABEL = "label"
 
 # Attribute / data keys. Persisted coordinates are rounded to whole mm
 ATTR_SHAPE = "shape"
@@ -46,12 +51,11 @@ SUPPORTED_SHAPES = (SHAPE_NONE, SHAPE_RECT, SHAPE_ELLIPSE, SHAPE_POLYGON)
 POLYGON_MAX_POINTS = 32
 POLYGON_MIN_POINTS = 3
 
-# Sensor / entity naming fragments
-COORD_SENSOR_UNIQUE_ID_FMT = "apollo_mmwave_{location}_zone_{zone_id}"
-PRESENCE_SENSOR_UNIQUE_ID_FMT = "apollo_mmwave_{location}_zone_{zone_id}_presence"
-
-# The zone-drawing card this integration bundles (vendored from zone-mapper-card).
-CARD_TYPE = "custom:zone-mapper-card"
+# The zone-drawing card this integration bundles (forked from zone-mapper-card).
+# The name is ours alone: the standalone card keeps `zone-mapper-card`, and a
+# browser that loads both bundles can no longer hand one card the other's
+# backend. Nothing aliases the old name.
+CARD_TYPE = "custom:apollo-radar-zone-map-card"
 
 # Options flow: opt out of the auto-created dashboard.
 CONF_AUTO_CREATE_VIEW = "auto_create_view"
@@ -76,7 +80,7 @@ STATIC_URL_BASE = f"/{DOMAIN}"
 FRONTEND_DIR = "www"
 JS_BUNDLES = (
     "apollo-radar-tuning.js",  # tuning cards + dashboard strategy
-    "zone-mapper-card.js",  # vendored 2D zone-drawing card
+    "apollo-radar-zone-map-card.js",  # 2D zone-drawing card
 )
 
 # Log / warning templates

@@ -1,8 +1,11 @@
 """
 Presence binary sensor platform for Apollo mmWave.
 
-One occupancy sensor per zone: on when any tracked LD2450 target's (x, y) —
-rotated by the location's device rotation — falls inside the zone's shape.
+One occupancy sensor per zone: on when any tracked LD2450 target's (x, y),
+rotated by the device's configured rotation, falls inside the zone's shape.
+Identity is the radar's Home Assistant device id plus the zone id, and the
+entity is registered against that device, so zone presence shows up on the
+radar's device page where automations are built from, and renaming it is safe.
 """
 
 from __future__ import annotations
@@ -17,9 +20,9 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util import slugify
 
 from .const import (
     ATTR_CX,
@@ -35,11 +38,10 @@ from .const import (
     ATTR_Y_MAX,
     ATTR_Y_MIN,
     POLYGON_MIN_POINTS,
-    PRESENCE_SENSOR_UNIQUE_ID_FMT,
     SIGNAL_ZONES_UPDATED,
-    STORE_ENTITIES,
     STORE_ZONES,
 )
+from .ld2450 import effective_target_pairs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -165,21 +167,21 @@ async def async_setup_entry(
 
     def _sync_entities() -> None:
         current = {
-            (location, zone_id)
-            for location, loc in store.locations.items()
-            for zone_id in loc[STORE_ZONES]
+            (device_id, zone_id)
+            for device_id, device in store.devices.items()
+            for zone_id in device[STORE_ZONES]
         }
         added.intersection_update(current)
         new_entities = [
-            ZonePresenceBinarySensor(store, location, zone_id)
-            for location, zone_id in sorted(current - added)
+            ZonePresenceBinarySensor(hass, store, device_id, zone_id)
+            for device_id, zone_id in sorted(current - added)
         ]
         added.update(current - added)
         if new_entities:
             async_add_entities(new_entities)
 
     @callback
-    def _zones_updated(_location: str) -> None:
+    def _zones_updated(_device_id: str) -> None:
         _sync_entities()
 
     entry.async_on_unload(
@@ -194,27 +196,44 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
     _attr_should_poll = False
     _attr_icon = "mdi:motion-sensor"
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
+    _attr_has_entity_name = True
 
-    def __init__(self, store: ZoneStore, location: str, zone_id: int) -> None:
+    def __init__(
+        self, hass: HomeAssistant, store: ZoneStore, device_id: str, zone_id: int
+    ) -> None:
         """Initialize from the store."""
         self._store = store
-        self._location = location
+        self._device_id = device_id
         self._zone_id = zone_id
         self._attr_is_on = False
         self._unsub_state_listener: Callable[[], None] | None = None
 
-        self._attr_name = f"{location} Zone {zone_id} Presence"
-        self._attr_unique_id = PRESENCE_SENSOR_UNIQUE_ID_FMT.format(
-            location=slugify(location), zone_id=zone_id
-        )
-        self.entity_id = f"binary_sensor.{self._attr_unique_id}"
+        self._attr_name = f"Zone {zone_id} presence"
+        self._attr_unique_id = f"{device_id}_zone_{zone_id}_presence"
+        # Set before the entity reaches the platform so the registry entry is
+        # created already linked to the radar. Attaching afterwards would leave
+        # the first entity id and friendly name derived from a device-less
+        # entity, which is what this rework exists to stop.
+        self.device_entry = dr.async_get(hass).async_get(device_id)
+        if self.device_entry is None:
+            _LOGGER.warning(
+                "Apollo mmWave: zone %s is stored against device %s, which no"
+                " longer exists. Its presence entity will not appear on any"
+                " device page; re-draw the zone on the radar's card.",
+                zone_id,
+                device_id,
+            )
 
     async def async_added_to_hass(self) -> None:
-        """Track zone updates and the location's coordinate entities."""
+        """Track zone updates and the device's coordinate entities."""
 
+        # The signal also carries registry changes to the radar's own target
+        # sensors, which is how a zone whose LD2450 entities land after this one
+        # (first pairing, a re-adopted device, esphome setting up second) starts
+        # tracking instead of reading "off" forever. See `async_track_target_pairs`.
         @callback
-        def _zones_updated(location: str) -> None:
-            if location == self._location:
+        def _zones_updated(device_id: str) -> None:
+            if device_id == self._device_id:
                 self._track_coordinate_entities()
                 self._evaluate_and_write()
 
@@ -231,8 +250,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
             self._unsub_state_listener = None
 
     def _tracked_pairs(self) -> list[dict[str, str]]:
-        pairs = self._store.location(self._location).get(STORE_ENTITIES, [])
-        return pairs if isinstance(pairs, list) else []
+        return effective_target_pairs(self.hass, self._store, self._device_id)
 
     def _track_coordinate_entities(self) -> None:
         if self._unsub_state_listener:
@@ -261,7 +279,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
             self.async_write_ha_state()
 
     def _evaluate_presence(self) -> bool:
-        zone_def = self._store.zone(self._location, self._zone_id)
+        zone_def = self._store.zone(self._device_id, self._zone_id)
         if zone_def is None:
             return False
         shape = zone_def.get(ATTR_SHAPE)
@@ -270,7 +288,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
             return False
         data = zone_def.get(ATTR_DATA)
 
-        rotation = self._store.location(self._location).get(ATTR_ROTATION_DEG)
+        rotation = self._store.device(self._device_id).get(ATTR_ROTATION_DEG)
         rotate = _build_point_rotator(rotation)
 
         return any(

@@ -4,7 +4,7 @@ Frontend wiring for Apollo mmWave.
 This integration ships its own Lovelace frontend so users install ONE thing:
 
 1. ``async_register_frontend_assets`` serves the bundled JS (the radar-tuning
-   cards + dashboard strategy, and the vendored zone-mapper-card) from
+   cards + dashboard strategy, and the zone-drawing card) from
    ``custom_components/apollo_mmwave/www`` and registers each bundle twice:
 
    - as a Lovelace *resource* (storage mode), so browser tabs that were open
@@ -14,34 +14,52 @@ This integration ships its own Lovelace frontend so users install ONE thing:
      collection is read-only. Both point at the same versioned URL, so the
      browser's module cache loads the code exactly once.
 
-2. ``async_register_dashboard`` registers a dedicated, strategy-backed
-   "Apollo mmWave" dashboard in the sidebar. The dashboard config is simply
-   ``{"strategy": {"type": "custom:apollo-radar-tuning"}}`` — the frontend
-   strategy re-runs on every load, detecting each Apollo mmWave device and
-   building one tab per device, so the dashboard self-updates as devices come
-   and go (no one-time seeding, no stored card layout to drift).
+2. ``async_register_dashboard`` creates an ordinary storage dashboard named
+   "Apollo mmWave" in Lovelace's dashboards collection, and saves
+   ``{"strategy": {"type": "custom:apollo-radar-tuning"}}`` as its config. The
+   frontend strategy re-runs on every load, detecting each Apollo mmWave device
+   and building one tab per device, so the dashboard self-updates as devices
+   come and go (no one-time seeding, no stored card layout to drift).
 
-Lovelace internals (``hass.data[LOVELACE_DATA].dashboards``) are not a public
-contract, so dashboard registration is wrapped defensively: if the shape ever
-changes we log and continue without the auto-dashboard rather than breaking
-setup.
+   It is a real collection item rather than a synthetic read-only config so
+   that users get the things Home Assistant already builds for storage
+   dashboards: a title on the dashboards settings page, and a working "take
+   control" for anyone who wants to customize it. Once someone takes control
+   their config has no ``strategy`` key, which is exactly how we tell "still
+   ours" from "now theirs" and never write over their work.
+
+   The item is created once and then only ever has its *config* refreshed.
+   Title, icon, sidebar visibility and admin-only belong to the user from the
+   moment the row exists, so they are written at creation and never again. The
+   "auto-create dashboard" option is the single source of truth for whether the
+   dashboard exists; nothing else removes it, and a reload leaves it alone.
+
+Lovelace internals (``hass.data[LOVELACE_DATA]`` and the dashboards collection
+behind the ``lovelace/dashboards`` websocket API) are not a public contract, so
+every touch is wrapped defensively: if the shape ever changes we log and
+continue without the auto-dashboard rather than breaking setup.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import (
+    CONF_ICON,
+    CONF_REQUIRE_ADMIN,
+    CONF_SHOW_IN_SIDEBAR,
+    CONF_TITLE,
     CONF_URL_PATH,
     LOVELACE_DATA,
-    MODE_STORAGE,
+    ConfigNotFound,
 )
-from homeassistant.components.lovelace.dashboard import LovelaceConfig
-from homeassistant.helpers.json import json_bytes, json_fragment
+from homeassistant.components.websocket_api.const import (
+    DOMAIN as WEBSOCKET_API_DOMAIN,
+)
 from homeassistant.loader import async_get_integration
 
 from .const import (
@@ -118,6 +136,9 @@ async def _async_register_lovelace_resources(
     a cached app shell never see extra JS urls, so without the resource the
     dashboard times out waiting for the strategy element and only a hard
     refresh recovers. Every non-success branch logs at warning with the reason.
+
+    Entries under our static path that are no longer in ``JS_BUNDLES`` are
+    deleted, so renaming a bundle does not leave a 404 behind on upgrade.
     """
     try:
         lovelace_data = hass.data.get(LOVELACE_DATA)
@@ -160,12 +181,16 @@ async def _async_register_lovelace_resources(
                 # Same bundle, older ?v= cache-buster: point it at this version.
                 await resources.async_update_item(item["id"], {"url": url})
                 updated.append(url)
-        if created or updated:
+
+        removed = await _async_remove_stale_resources(resources, existing)
+
+        if created or updated or removed:
             _LOGGER.info(
                 "Apollo mmWave: Lovelace resources registered (created: %s;"
-                " updated: %s)",
+                " updated: %s; removed: %s)",
                 created or "none",
                 updated or "none",
+                removed or "none",
             )
         else:
             _LOGGER.debug("Apollo mmWave: Lovelace resources already current.")
@@ -178,112 +203,185 @@ async def _async_register_lovelace_resources(
         )
 
 
-class StrategyDashboardConfig(LovelaceConfig):
+async def _async_remove_stale_resources(
+    resources: Any, existing: dict[str, dict[str, Any]]
+) -> list[str]:
     """
-    A read-only Lovelace dashboard whose config is a single strategy.
+    Delete resource entries under our static path that we no longer ship.
 
-    The frontend asks the ``lovelace`` websocket for this dashboard's config,
-    which returns ``{"strategy": {"type": DASHBOARD_STRATEGY_TYPE}}``. The custom
-    dashboard strategy then generates the views client-side on every load.
+    Renaming a bundle strands the old entry: nothing in ``JS_BUNDLES`` matches
+    it, so it survives untouched and points at a file that no longer exists,
+    and every dashboard load fetches a 404. ``JS_BUNDLES`` is the full list of
+    what we serve, so anything else below ``/apollo_mmwave/`` is ours and dead.
+    Nothing outside that prefix is ever touched.
+
+    ``existing`` is keyed by url with the ``?v=`` cache-buster stripped.
     """
+    if not hasattr(resources, "async_delete_item"):
+        return []
+    prefix = f"{STATIC_URL_BASE}/"
+    ours = {f"{prefix}{name}" for name in JS_BUNDLES}
+    removed: list[str] = []
+    for url, item in existing.items():
+        if url.startswith(prefix) and url not in ours:
+            await resources.async_delete_item(item["id"])
+            removed.append(url)
+    return removed
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        url_path: str,
-        strategy_type: str,
-        devices: list[str] | None = None,
-    ) -> None:
-        """Initialize with the url path and strategy config to serve."""
-        super().__init__(hass, url_path, {CONF_URL_PATH: url_path})
-        strategy: dict[str, Any] = {"type": strategy_type}
-        if devices:
-            # Explicit selection: the strategy shows exactly these devices,
-            # online or not, instead of auto-detecting live ones.
-            strategy["devices"] = list(devices)
-        self._strategy_config: dict[str, Any] = {"strategy": strategy}
 
-    @property
-    def strategy_devices(self) -> list[str]:
-        """Return the explicit device selection baked into this config."""
-        return list(self._strategy_config["strategy"].get("devices", []))
+# The websocket command whose handler is bound to the live dashboards
+# collection. See _dashboards_collection for why we go the long way round.
+_WS_DASHBOARDS_LIST = "lovelace/dashboards/list"
 
-    @property
-    @override
-    def mode(self) -> str:
-        """Report storage mode so the frontend renders it as a normal dashboard."""
-        return MODE_STORAGE
 
-    @override
-    async def async_get_info(self) -> dict[str, Any]:
-        """Return minimal config info (a strategy generates the views)."""
-        return {"mode": self.mode}
+def _dashboards_collection(hass: HomeAssistant) -> Any | None:
+    """
+    Return Lovelace's storage dashboards collection, or None if unreachable.
 
-    @override
-    async def async_load(self, force: bool) -> dict[str, Any]:
-        """Return the strategy dashboard config."""
-        return self._strategy_config
+    Home Assistant 2025.9 keeps the collection in a local variable inside
+    lovelace's own ``async_setup``; ``hass.data[LOVELACE_DATA]`` carries only
+    mode/dashboards/resources/yaml_dashboards. The one live reference is the
+    websocket CRUD object bound to the ``lovelace/dashboards/*`` commands, so
+    borrow it from the command registry. Constructing our own
+    ``DashboardsCollection`` is not an alternative: each instance rewrites the
+    whole item list into the shared store, so two of them delete each other's
+    dashboards.
+    """
+    lovelace_data = hass.data.get(LOVELACE_DATA)
+    if lovelace_data is None:
+        return None
+    # Preferred path if a future release ever puts it on the dataclass.
+    collection = getattr(lovelace_data, "dashboards_collection", None)
+    if collection is not None:
+        return collection
+    registered = hass.data.get(WEBSOCKET_API_DOMAIN) or {}
+    entry = registered.get(_WS_DASHBOARDS_LIST)
+    handler = entry[0] if isinstance(entry, tuple) else entry
+    return getattr(getattr(handler, "__self__", None), "storage_collection", None)
 
-    @override
-    async def async_json(self, force: bool) -> json_fragment:
-        """Return the JSON representation of the strategy config."""
-        return json_fragment(json_bytes(self._strategy_config))
+
+def _dashboard_item(collection: Any) -> dict[str, Any] | None:
+    """Return the collection item sitting on our url path, if there is one."""
+    return next(
+        (
+            item
+            for item in collection.async_items()
+            if item.get(CONF_URL_PATH) == DASHBOARD_URL_PATH
+        ),
+        None,
+    )
+
+
+async def _async_stored_config(hass: HomeAssistant) -> dict[str, Any] | None:
+    """Return the dashboard's stored Lovelace config, or None if it has none."""
+    config = hass.data[LOVELACE_DATA].dashboards.get(DASHBOARD_URL_PATH)
+    if config is None:
+        return None
+    try:
+        return await config.async_load(force=False)
+    except ConfigNotFound:
+        return None
+
+
+def _is_ours(stored: dict[str, Any] | None) -> bool:
+    """
+    Report whether a stored config is still the strategy we generate.
+
+    Anything else on this url path belongs to the user: they either took
+    control (which strips the ``strategy`` key and replaces it with views) or
+    built their own dashboard here. Both must survive us untouched.
+    """
+    if not isinstance(stored, dict):
+        return False
+    strategy = stored.get("strategy")
+    return (
+        isinstance(strategy, dict) and strategy.get("type") == DASHBOARD_STRATEGY_TYPE
+    )
+
+
+def _desired_config(devices: list[str] | None) -> dict[str, Any]:
+    """Build the strategy config for the given device selection."""
+    strategy: dict[str, Any] = {"type": DASHBOARD_STRATEGY_TYPE}
+    if devices:
+        # Explicit selection: the strategy shows exactly these devices, online
+        # or not, instead of auto-detecting live ones.
+        strategy["devices"] = list(devices)
+    return {"strategy": strategy}
 
 
 async def async_register_dashboard(
     hass: HomeAssistant, devices: list[str] | None = None
 ) -> bool:
     """
-    Register the dedicated, strategy-backed "Apollo mmWave" sidebar dashboard.
+    Create the "Apollo mmWave" dashboard as a normal storage dashboard.
 
-    Re-registers (and notifies open frontends) when the explicit device
-    selection changed. Returns True if the dashboard is present, False if the
-    Lovelace environment wasn't ready and we should retry later.
+    Creates the collection item if the "auto-create dashboard" option is on and
+    it is missing, then keeps the strategy config current (the explicit device
+    selection can change). Never touches a dashboard that is not ours. Returns
+    False only if Lovelace's internals could not be reached at all.
     """
     try:
-        lovelace_data = hass.data.get(LOVELACE_DATA)
-        if lovelace_data is None:
-            _LOGGER.debug("Apollo mmWave: lovelace data not available yet.")
+        collection = _dashboards_collection(hass)
+        if collection is None:
+            _LOGGER.warning(
+                "Apollo mmWave: could not reach Lovelace's dashboards collection,"
+                " so the '%s' dashboard was not created. You can add a dashboard"
+                " with strategy type '%s' manually.",
+                DASHBOARD_TITLE,
+                DASHBOARD_STRATEGY_TYPE,
+            )
             return False
 
-        dashboards = getattr(lovelace_data, "dashboards", None)
-        if not isinstance(dashboards, dict):
-            _LOGGER.warning(
-                "Apollo mmWave: unexpected lovelace dashboards shape; skipping"
-                " auto-dashboard registration."
-            )
-            return True
-
-        existing = dashboards.get(DASHBOARD_URL_PATH)
-        if isinstance(existing, StrategyDashboardConfig):
-            if existing.strategy_devices == list(devices or []):
-                _LOGGER.debug("Apollo mmWave: dashboard already registered.")
+        # Ownership is decided by who created the row, not by what is stored on
+        # it. A dashboard someone else made has no config until they save one,
+        # and inferring "unowned" from that empty config would let us write our
+        # strategy over their work and then delete it as if it were ours.
+        created = False
+        if _dashboard_item(collection) is None:
+            if DASHBOARD_URL_PATH in hass.data[LOVELACE_DATA].dashboards:
+                # A YAML dashboard holds the url path. Lovelace refuses a second
+                # panel there, and it isn't ours to replace.
+                _LOGGER.debug(
+                    "Apollo mmWave: another dashboard already owns '%s'; skipping.",
+                    DASHBOARD_URL_PATH,
+                )
                 return True
-        elif existing is not None:
-            # A user-created dashboard occupies the url path; leave it alone.
-            _LOGGER.debug("Apollo mmWave: foreign dashboard on url path; skipping.")
+            await collection.async_create_item(
+                {
+                    CONF_URL_PATH: DASHBOARD_URL_PATH,
+                    CONF_TITLE: DASHBOARD_TITLE,
+                    CONF_ICON: DASHBOARD_ICON,
+                    CONF_SHOW_IN_SIDEBAR: True,
+                    CONF_REQUIRE_ADMIN: False,
+                }
+            )
+            created = True
+            _LOGGER.info(
+                "Apollo mmWave: created the '%s' dashboard. The 'auto-create"
+                " dashboard' option in the integration's settings is what"
+                " controls it: turn that off to remove it and keep it removed."
+                " You can also hide it from your own sidebar in your profile if"
+                " you would rather lay the cards out yourself.",
+                DASHBOARD_TITLE,
+            )
+
+        stored = await _async_stored_config(hass)
+        if not created and not _is_ours(stored):
+            _LOGGER.debug(
+                "Apollo mmWave: the '%s' dashboard is not ours to write to;"
+                " leaving its config alone.",
+                DASHBOARD_TITLE,
+            )
             return True
 
-        dashboards[DASHBOARD_URL_PATH] = StrategyDashboardConfig(
-            hass, DASHBOARD_URL_PATH, DASHBOARD_STRATEGY_TYPE, devices
-        )
-        # Open tabs subscribed to this dashboard re-fetch the config on this
-        # event, so an options change applies without a reload.
-        hass.bus.async_fire(
-            "lovelace_updated", {"url_path": DASHBOARD_URL_PATH, "mode": MODE_STORAGE}
-        )
-
-        if not frontend.async_panel_exists(hass, DASHBOARD_URL_PATH):
-            frontend.async_register_built_in_panel(
-                hass,
-                "lovelace",
-                frontend_url_path=DASHBOARD_URL_PATH,
-                sidebar_title=DASHBOARD_TITLE,
-                sidebar_icon=DASHBOARD_ICON,
-                require_admin=False,
-                config={"mode": MODE_STORAGE},
-                update=False,
-            )
+        desired = _desired_config(devices)
+        if stored == desired:
+            _LOGGER.debug("Apollo mmWave: dashboard already registered.")
+            return True
+        dashboard = hass.data[LOVELACE_DATA].dashboards[DASHBOARD_URL_PATH]
+        # async_save fires the lovelace_updated event, so open tabs pick up a
+        # changed device selection without a reload.
+        await dashboard.async_save(desired)
     except Exception:  # noqa: BLE001
         _LOGGER.warning(
             "Apollo mmWave: could not register the dashboard; continuing without"
@@ -293,33 +391,37 @@ async def async_register_dashboard(
         )
         return True
     else:
-        _LOGGER.info(
-            "Apollo mmWave: registered the '%s' dashboard. Hide it from the"
-            " sidebar in your profile if you prefer to lay out the cards"
-            " yourself.",
-            DASHBOARD_TITLE,
-        )
         return True
 
 
 async def async_remove_dashboard(hass: HomeAssistant) -> None:
     """
-    Remove the auto-registered dashboard and its sidebar panel.
+    Remove the auto-created dashboard.
 
-    Called when the user turns the dashboard option off or unloads the entry.
-    Only removes the dashboard if it is ours (a ``StrategyDashboardConfig``) so
-    a user-created dashboard on the same url path is left alone.
+    Called only when the user turns the "auto-create dashboard" option off, or
+    when the config entry is removed. An integration reload deliberately does
+    not come through here: deleting and recreating the item would throw away
+    whatever the user renamed, re-iconed, or hid on the dashboards settings
+    page. Deleting the collection item is what removes the sidebar panel and
+    the stored config; lovelace does both from its own collection listener.
+    Only a config that is still our generated strategy is deleted, so a
+    dashboard the user built or took control of here is left standing.
     """
     try:
-        lovelace_data = hass.data.get(LOVELACE_DATA)
-        dashboards = getattr(lovelace_data, "dashboards", None)
-        if isinstance(dashboards, dict) and isinstance(
-            dashboards.get(DASHBOARD_URL_PATH), StrategyDashboardConfig
-        ):
-            dashboards.pop(DASHBOARD_URL_PATH, None)
-            if frontend.async_panel_exists(hass, DASHBOARD_URL_PATH):
-                frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
-            _LOGGER.info("Apollo mmWave: removed the '%s' dashboard.", DASHBOARD_TITLE)
+        collection = _dashboards_collection(hass)
+        if collection is None:
+            return
+        item = _dashboard_item(collection)
+        if item is None:
+            return
+        if not _is_ours(await _async_stored_config(hass)):
+            _LOGGER.debug(
+                "Apollo mmWave: the '%s' dashboard is no longer ours; leaving it.",
+                DASHBOARD_TITLE,
+            )
+            return
+        await collection.async_delete_item(item["id"])
+        _LOGGER.info("Apollo mmWave: removed the '%s' dashboard.", DASHBOARD_TITLE)
     except Exception:  # noqa: BLE001
         _LOGGER.warning(
             "Apollo mmWave: could not remove the dashboard; it may remain in"

@@ -5,7 +5,7 @@
   "description": "Apollo mmWave Lovelace frontend (radar tuning cards + dashboard strategy), bundled into the apollo_mmwave integration",
   "license": "MIT",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.zone-map.config.ts",
     "watch": "vite build --watch",
     "test": "vitest run",
     "test:watch": "vitest"

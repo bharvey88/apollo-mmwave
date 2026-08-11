@@ -4,7 +4,7 @@ import type { HomeAssistant } from "./types";
  * LD2450 tracking radar support (X/Y target coordinates), used by R-PRO-1 and
  * MTR-1. This is deliberately separate from the gate-radar *tuning* profiles
  * (LD2410/LD2412): the LD2450 reports moving-target positions, which the
- * vendored `zone-mapper-card` draws occupancy zones over — it is not tuned with
+ * `zone-mapper-card` draws occupancy zones over, it is not tuned with
  * per-gate thresholds, so it has no tuning profile.
  *
  * Entity naming is derived from R-PRO-1 firmware

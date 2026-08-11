@@ -4,7 +4,7 @@ Frontend wiring for Apollo mmWave.
 This integration ships its own Lovelace frontend so users install ONE thing:
 
 1. ``async_register_frontend_assets`` serves the bundled JS (the radar-tuning
-   cards + dashboard strategy, and the vendored zone-mapper-card) from
+   cards + dashboard strategy, and the zone-drawing card) from
    ``custom_components/apollo_mmwave/www`` and registers each bundle twice:
 
    - as a Lovelace *resource* (storage mode), so browser tabs that were open

@@ -25,7 +25,7 @@ the integration serves all of its frontend itself.
 | --- | --- |
 | `custom_components/apollo_mmwave` | The integration: zone backend (occupancy sensors + `apollo_mmwave.update_zone` service), serves the bundled JS, and registers the dashboard. |
 | `…/www/apollo-radar-tuning.js` | Tuning cards + the `custom:apollo-radar-tuning` dashboard strategy (built from `frontend-src/`). |
-| `…/www/zone-mapper-card.js` | The 2D zone-drawing card, vendored from [zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card). |
+| `…/www/zone-mapper-card.js` | The 2D zone-drawing card, forked from [zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card) (also built from `frontend-src/`). |
 
 The dashboard is **strategy-backed**: it re-detects your devices on every load,
 so adding or removing a sensor just adds or removes a tab — nothing to maintain.
@@ -100,7 +100,7 @@ tests). The build writes straight into the integration's `www/` folder:
 cd frontend-src
 npm install
 npm test         # vitest
-npm run build    # → ../custom_components/apollo_mmwave/www/apollo-radar-tuning.js
+npm run build    # → ../custom_components/apollo_mmwave/www/*.js (one pass per bundle)
 ```
 
 The Python backend has a pytest suite (`pytest-homeassistant-custom-component`):
@@ -114,8 +114,11 @@ Zone data is persisted in `.storage/apollo_mmwave.zones`; installs upgrading
 from ≤1.1.x are migrated automatically (including a one-time entity_id rename
 to the `sensor.apollo_mmwave_*` pattern the zone-mapper card expects).
 
-See `frontend-src/vendor/zone-mapper-card.md` for how the zone-mapping card is
-vendored and the two patches to re-apply when updating it.
+The zone-drawing card is no longer vendored. It started as a copy of
+[zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card) and is
+now a fork living in `frontend-src/src/zone-map/`: fixes land here first and
+get offered back upstream, rather than being re-applied as patches on every
+upstream drop.
 
 ## Credits
 

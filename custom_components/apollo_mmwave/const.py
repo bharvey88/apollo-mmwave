@@ -51,7 +51,7 @@ SUPPORTED_SHAPES = (SHAPE_NONE, SHAPE_RECT, SHAPE_ELLIPSE, SHAPE_POLYGON)
 POLYGON_MAX_POINTS = 32
 POLYGON_MIN_POINTS = 3
 
-# The zone-drawing card this integration bundles (vendored from zone-mapper-card).
+# The zone-drawing card this integration bundles (forked from zone-mapper-card).
 CARD_TYPE = "custom:zone-mapper-card"
 
 # Options flow: opt out of the auto-created dashboard.
@@ -77,7 +77,7 @@ STATIC_URL_BASE = f"/{DOMAIN}"
 FRONTEND_DIR = "www"
 JS_BUNDLES = (
     "apollo-radar-tuning.js",  # tuning cards + dashboard strategy
-    "zone-mapper-card.js",  # vendored 2D zone-drawing card
+    "zone-mapper-card.js",  # 2D zone-drawing card
 )
 
 # Log / warning templates

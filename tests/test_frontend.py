@@ -43,7 +43,7 @@ async def test_lovelace_resources_registered(hass, config_entry) -> None:
     urls = {str(item.get("url", "")).partition("?")[0] for item in items}
 
     assert "/apollo_mmwave/apollo-radar-tuning.js" in urls
-    assert "/apollo_mmwave/zone-mapper-card.js" in urls
+    assert "/apollo_mmwave/apollo-radar-zone-map-card.js" in urls
     # All entries are module resources with a cache-busting version. The
     # stored field is "type" (the WS create API takes "res_type").
     for item in items:
@@ -80,6 +80,36 @@ async def test_resource_version_updated_on_upgrade(hass, config_entry) -> None:
     assert len(ours) == 1
     assert ours[0]["id"] == old_id
     assert "?v=0.0.1" not in ours[0]["url"]
+
+
+async def test_stale_bundle_resource_is_removed(hass, config_entry) -> None:
+    """
+    A resource left over from a renamed bundle is deleted, not left 404ing.
+
+    Renaming a bundle strands the old resource entry: it points at a file that
+    no longer exists, so every dashboard load fetches a 404. Only entries under
+    our own static path are swept; everyone else's cards are untouchable.
+    """
+    assert await async_setup_component(hass, "lovelace", {})
+    resources = hass.data[LOVELACE_DATA].resources
+    if not resources.loaded:
+        await resources.async_load()
+        resources.loaded = True
+    await resources.async_create_item(
+        {"res_type": "module", "url": "/apollo_mmwave/zone-mapper-card.js?v=1.1.0"}
+    )
+    await resources.async_create_item(
+        {"res_type": "module", "url": "/local/community/somebody-elses-card.js"}
+    )
+
+    await setup_integration(hass, config_entry)
+
+    urls = {str(i.get("url", "")) for i in resources.async_items()}
+    assert not any(u.startswith("/apollo_mmwave/zone-mapper-card.js") for u in urls)
+    assert "/local/community/somebody-elses-card.js" in urls
+    assert any(
+        u.startswith("/apollo_mmwave/apollo-radar-zone-map-card.js") for u in urls
+    )
 
 
 @pytest.fixture

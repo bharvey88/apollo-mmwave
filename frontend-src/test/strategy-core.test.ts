@@ -180,13 +180,18 @@ describe("LD2450 zone mapping", () => {
     expect(devices[0].ld2450).toBe(true);
   });
 
-  it("emits a zone-mapper-card keyed to the device for an LD2450-only device", () => {
+  it("gives the zone card a device id, not a location name", () => {
     const { hass } = ld2450Hass();
     const dev = detectRadarDevices(hass)[0];
     const cards = buildDeviceCards(hass, dev);
-    const zone = cards.find((c: any) => c.type === "custom:zone-mapper-card") as any;
+    const zone = cards.find(
+      (c: any) => c.type === "custom:apollo-radar-zone-map-card"
+    ) as any;
     expect(zone).toBeDefined();
-    expect(zone.location).toBe("Office R-PRO-1");
+    expect(zone.device_id).toBe(dev.deviceId);
+    expect(zone.location).toBeUndefined();
+    // The name still rides along, as a display title only.
+    expect(zone.title).toBe("Office R-PRO-1");
   });
 
   it("adds the zone map alongside tuning on a device with both radars", () => {
@@ -212,6 +217,6 @@ describe("LD2450 zone mapping", () => {
     const cards = buildDeviceCards(hass, dev);
     const types = cards.map((c: any) => c.type);
     expect(types).toContain("custom:apollo-radar-gate-energy-card");
-    expect(types).toContain("custom:zone-mapper-card");
+    expect(types).toContain("custom:apollo-radar-zone-map-card");
   });
 });

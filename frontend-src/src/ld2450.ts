@@ -4,7 +4,7 @@ import type { HomeAssistant } from "./types";
  * LD2450 tracking radar support (X/Y target coordinates), used by R-PRO-1 and
  * MTR-1. This is deliberately separate from the gate-radar *tuning* profiles
  * (LD2410/LD2412): the LD2450 reports moving-target positions, which the
- * `zone-mapper-card` draws occupancy zones over, it is not tuned with
+ * Apollo Zone Map card draws occupancy zones over, it is not tuned with
  * per-gate thresholds, so it has no tuning profile.
  *
  * Entity naming is derived from R-PRO-1 firmware
@@ -91,25 +91,21 @@ export function hasLd2450(hass: HomeAssistant, base: string): boolean {
 }
 
 /**
- * A `zone-mapper-card` config for this device's LD2450.
+ * An Apollo Zone Map card config for a device's LD2450.
  *
- * The card persists its tracked X/Y entity pairs in the integration backend
- * (picked once via the card's own device/entity pickers), so the config only
- * needs the `location` key plus sensible display defaults.
- *
- * `location` is the device's *display name* (base name only as a fallback): the
- * card shows it as a label and the backend builds zone entity names from it.
- * Known limitation: renaming the device changes the key, orphaning previously
- * drawn zones — fixing that properly means keying zones by device id in the
- * backend store (planned rework), not a frontend-only change.
+ * Identity is the device id: it survives renames, cannot collide with another
+ * device's slug, and is what the zone store is keyed by. `title` is display
+ * only, so a user can call the card "Kitchen" and still share zone data with
+ * the auto-generated dashboard.
  */
-export function zoneMapperCard(
-  base: string,
-  location: string
+export function zoneMapCard(
+  deviceId: string,
+  title: string
 ): Record<string, any> {
   return {
-    type: "custom:zone-mapper-card",
-    location: location || base,
+    type: "custom:apollo-radar-zone-map-card",
+    device_id: deviceId,
+    title,
     unit_display: true,
   };
 }

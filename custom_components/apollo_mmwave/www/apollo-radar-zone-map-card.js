@@ -183,7 +183,7 @@ class ZoneMapCard extends HTMLElement {
   // Default stub config
   static getStubConfig() {
     return {
-      type: "custom:zone-mapper-card",
+      type: "custom:apollo-radar-zone-map-card",
       dark_mode: false,
       start_locked: false,
       show_undo: true,
@@ -192,7 +192,9 @@ class ZoneMapCard extends HTMLElement {
       // optional, px label size override
       input_units: "mm",
       grid_units: "mm",
-      location: "Office",
+      // No device_id: there is nothing sensible to guess, and setConfig says
+      // so plainly. Task 12 replaces this stub with a real device picker.
+      title: "",
       // Units support: 'mm', 'cm', 'm', 'in', 'ft' converts to millimeters internally
       // By default, use the in-card dropdowns to select a device and X/Y entities.
       // Zones can be managed in-card; you can optionally pre-seed a list here:
@@ -212,11 +214,15 @@ class ZoneMapCard extends HTMLElement {
     };
   }
   setConfig(config) {
-    if (!config.location) {
-      throw new Error("You must specify a location.");
+    if (!config.device_id) {
+      throw new Error(
+        "The Apollo Zone Map card needs a device_id. Set `device_id:` to the Home Assistant device id of your radar (Settings > Devices, the id in the URL), or add the card from the Apollo mmWave dashboard, which fills it in for you."
+      );
     }
     this.config = config;
-    this.location = String(config.location);
+    this.deviceId = String(config.device_id);
+    this.cardTitle = config.title === void 0 ? "" : String(config.title);
+    this.location = this.cardTitle || this.deviceId;
     this._lockConfigured = config.start_locked !== void 0;
     if (this._lockConfigured) {
       this.isLocked = !!config.start_locked;
@@ -391,7 +397,7 @@ class ZoneMapCard extends HTMLElement {
         @media (max-width: 520px) { .entity-row { grid-template-columns: 1fr; } }
       </style>
       <div class="container ${this.darkMode ? "dark" : ""}">
-        <div class="device-title">Location: ${this.location}</div>
+        <div class="device-title">${this.cardTitle || ""}</div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
           <div class="overlay-controls overlay-controls-left" id="overlayControlsLeft">
@@ -2329,12 +2335,12 @@ class ZoneMapCard extends HTMLElement {
     }
   }
 }
-registerElement("zone-mapper-card", ZoneMapCard);
+registerElement("apollo-radar-zone-map-card", ZoneMapCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "zone-mapper-card",
-  name: "Zone Mapper Card",
-  description: "Draw and manage detection zones for devices"
+  type: "apollo-radar-zone-map-card",
+  name: "Apollo Zone Map",
+  description: "Draw occupancy zones over LD2450 tracking-radar targets"
 });
 export {
   ZoneMapCard

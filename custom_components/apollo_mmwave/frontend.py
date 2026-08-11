@@ -136,6 +136,9 @@ async def _async_register_lovelace_resources(
     a cached app shell never see extra JS urls, so without the resource the
     dashboard times out waiting for the strategy element and only a hard
     refresh recovers. Every non-success branch logs at warning with the reason.
+
+    Entries under our static path that are no longer in ``JS_BUNDLES`` are
+    deleted, so renaming a bundle does not leave a 404 behind on upgrade.
     """
     try:
         lovelace_data = hass.data.get(LOVELACE_DATA)
@@ -178,12 +181,16 @@ async def _async_register_lovelace_resources(
                 # Same bundle, older ?v= cache-buster: point it at this version.
                 await resources.async_update_item(item["id"], {"url": url})
                 updated.append(url)
-        if created or updated:
+
+        removed = await _async_remove_stale_resources(resources, existing)
+
+        if created or updated or removed:
             _LOGGER.info(
                 "Apollo mmWave: Lovelace resources registered (created: %s;"
-                " updated: %s)",
+                " updated: %s; removed: %s)",
                 created or "none",
                 updated or "none",
+                removed or "none",
             )
         else:
             _LOGGER.debug("Apollo mmWave: Lovelace resources already current.")
@@ -194,6 +201,32 @@ async def _async_register_lovelace_resources(
             " until a hard refresh. Please report this traceback:",
             exc_info=True,
         )
+
+
+async def _async_remove_stale_resources(
+    resources: Any, existing: dict[str, dict[str, Any]]
+) -> list[str]:
+    """
+    Delete resource entries under our static path that we no longer ship.
+
+    Renaming a bundle strands the old entry: nothing in ``JS_BUNDLES`` matches
+    it, so it survives untouched and points at a file that no longer exists,
+    and every dashboard load fetches a 404. ``JS_BUNDLES`` is the full list of
+    what we serve, so anything else below ``/apollo_mmwave/`` is ours and dead.
+    Nothing outside that prefix is ever touched.
+
+    ``existing`` is keyed by url with the ``?v=`` cache-buster stripped.
+    """
+    if not hasattr(resources, "async_delete_item"):
+        return []
+    prefix = f"{STATIC_URL_BASE}/"
+    ours = {f"{prefix}{name}" for name in JS_BUNDLES}
+    removed: list[str] = []
+    for url, item in existing.items():
+        if url.startswith(prefix) and url not in ours:
+            await resources.async_delete_item(item["id"])
+            removed.append(url)
+    return removed
 
 
 # The websocket command whose handler is bound to the live dashboards

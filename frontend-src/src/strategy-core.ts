@@ -6,7 +6,7 @@ import {
 } from "./entities";
 import { ld2450EntityIds } from "./ld2450";
 import { apolloModelInfo, type RadarProfile } from "./profiles";
-import { hasLd2450, hasLd2450Device, zoneMapperCard } from "./ld2450";
+import { hasLd2450, hasLd2450Device, zoneMapCard } from "./ld2450";
 import {
   controlRows,
   zoneConfigRows,
@@ -301,7 +301,7 @@ function cardMap(
     cards.zoneHeader = dev.profile
       ? { type: "heading", heading: "Zone Map" }
       : undefined;
-    cards.zoneMap = zoneMapperCard(dev.base, dev.name);
+    cards.zoneMap = zoneMapCard(dev.deviceId, dev.name);
   }
 
   return cards;

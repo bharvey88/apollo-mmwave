@@ -25,7 +25,7 @@ the integration serves all of its frontend itself.
 | --- | --- |
 | `custom_components/apollo_mmwave` | The integration: zone backend (occupancy sensors + `apollo_mmwave.update_zone` service), serves the bundled JS, and registers the dashboard. |
 | `…/www/apollo-radar-tuning.js` | Tuning cards + the `custom:apollo-radar-tuning` dashboard strategy (built from `frontend-src/`). |
-| `…/www/zone-mapper-card.js` | The 2D zone-drawing card, forked from [zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card) (also built from `frontend-src/`). |
+| `…/www/apollo-radar-zone-map-card.js` | The 2D zone-drawing card, forked from [zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card) (also built from `frontend-src/`). |
 
 The dashboard is **strategy-backed**: it re-detects your devices on every load,
 so adding or removing a sensor just adds or removes a tab — nothing to maintain.
@@ -84,12 +84,18 @@ strategies stay available:
   ```
 
 - **Cards** — `custom:apollo-radar-distance-card`,
-  `custom:apollo-radar-gate-energy-card`, and `custom:zone-mapper-card` can be
-  placed individually (they're in the card picker).
+  `custom:apollo-radar-gate-energy-card`, and
+  `custom:apollo-radar-zone-map-card` can be placed individually (they're in
+  the card picker). The zone map card takes a `device_id`; `title` is display
+  only.
 
-> **Already using the standalone Zone Mapper card?** You can remove it — this
-> integration bundles its own copy. (If you leave it installed, nothing breaks;
-> the bundled copy guards against a duplicate registration.)
+> **Already using the standalone Zone Mapper card?** Both can be installed side
+> by side. Up to 2.0.0 they fought over the same element name,
+> `zone-mapper-card`, and whichever bundle a browser loaded first won it, so
+> one integration's card could end up writing to the other's backend. Our card
+> is now `apollo-radar-zone-map-card` and answers to nothing else, so a
+> hand-written `custom:zone-mapper-card` card that meant *this* one has to be
+> updated by hand.
 
 ## Development
 
@@ -112,7 +118,7 @@ uv run --no-project pytest tests/
 
 Zone data is persisted in `.storage/apollo_mmwave.zones`; installs upgrading
 from ≤1.1.x are migrated automatically (including a one-time entity_id rename
-to the `sensor.apollo_mmwave_*` pattern the zone-mapper card expects).
+to the `sensor.apollo_mmwave_*` pattern the zone map card expects).
 
 The zone-drawing card is no longer vendored. It started as a copy of
 [zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card) and is

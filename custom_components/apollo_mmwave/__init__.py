@@ -10,7 +10,6 @@ from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.util import slugify
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -37,14 +36,12 @@ from .const import (
     ATTR_Y_MIN,
     CONF_AUTO_CREATE_VIEW,
     CONF_DASHBOARD_DEVICES,
-    COORD_SENSOR_UNIQUE_ID_FMT,
     DATA_STORE,
     DEFAULT_AUTO_CREATE_VIEW,
     DOMAIN,
     EVENT_ZONE_UPDATED,
     POLYGON_MAX_POINTS,
     POLYGON_MIN_POINTS,
-    PRESENCE_SENSOR_UNIQUE_ID_FMT,
     SERVICE_UPDATE_ZONE,
     SHAPE_ELLIPSE,
     SHAPE_NONE,
@@ -210,38 +207,37 @@ def _normalize_polygon(data: Any, zone_id: int, location: str) -> dict[str, Any]
     return {**data, ATTR_POINTS: normalized_points}
 
 
-def _zone_entity_unique_ids(location: str, zone_id: int) -> tuple[str, str]:
-    safe_location = slugify(str(location))
+def _zone_entity_unique_ids(device_id: str, zone_id: int) -> tuple[str, str]:
     return (
-        COORD_SENSOR_UNIQUE_ID_FMT.format(location=safe_location, zone_id=zone_id),
-        PRESENCE_SENSOR_UNIQUE_ID_FMT.format(location=safe_location, zone_id=zone_id),
+        f"{device_id}_zone_{zone_id}",
+        f"{device_id}_zone_{zone_id}_presence",
     )
 
 
 def _update_registry_names(
-    hass: HomeAssistant, location: str, zone_id: int, zone_name: str
+    hass: HomeAssistant, device_id: str, zone_id: int, zone_name: str
 ) -> None:
     registry = er.async_get(hass)
-    sensor_uid, presence_uid = _zone_entity_unique_ids(location, zone_id)
+    sensor_uid, presence_uid = _zone_entity_unique_ids(device_id, zone_id)
 
     sensor_eid = registry.async_get_entity_id("sensor", DOMAIN, sensor_uid)
     if sensor_eid:
-        base = f"Apollo mmWave {location} Zone {zone_id}"
+        base = f"Zone {zone_id}"
         registry.async_update_entity(
             sensor_eid, name=f"{base} - {zone_name}" if zone_name else base
         )
 
     presence_eid = registry.async_get_entity_id("binary_sensor", DOMAIN, presence_uid)
     if presence_eid:
-        base = f"{location} Zone {zone_id} Presence"
+        base = f"Zone {zone_id} presence"
         registry.async_update_entity(
             presence_eid, name=f"{base} - {zone_name}" if zone_name else base
         )
 
 
-def _remove_zone_entities(hass: HomeAssistant, location: str, zone_id: int) -> None:
+def _remove_zone_entities(hass: HomeAssistant, device_id: str, zone_id: int) -> None:
     registry = er.async_get(hass)
-    sensor_uid, presence_uid = _zone_entity_unique_ids(location, zone_id)
+    sensor_uid, presence_uid = _zone_entity_unique_ids(device_id, zone_id)
 
     sensor_eid = registry.async_get_entity_id("sensor", DOMAIN, sensor_uid)
     if sensor_eid:
@@ -252,26 +248,29 @@ def _remove_zone_entities(hass: HomeAssistant, location: str, zone_id: int) -> N
         registry.async_remove(presence_eid)
 
 
-def _notify_zones_updated(hass: HomeAssistant, location: str) -> None:
+def _notify_zones_updated(hass: HomeAssistant, device_id: str) -> None:
     """Persist and fan out a zone change (internal signal + public event)."""
     get_store(hass).async_delay_save()
-    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, location)
-    hass.bus.async_fire(EVENT_ZONE_UPDATED, {"location": location})
+    async_dispatcher_send(hass, SIGNAL_ZONES_UPDATED, device_id)
+    hass.bus.async_fire(EVENT_ZONE_UPDATED, {"device_id": device_id})
 
 
 def _build_update_zone_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
     async def handle_update_zone(call: ServiceCall) -> None:
+        # The service field is still called `location`, but the store is keyed
+        # by device id now, so that is what it has to carry. The field itself is
+        # renamed when the service is reworked.
         location_raw = call.data.get("location")
         if not isinstance(location_raw, str) or not location_raw.strip():
             _LOGGER.debug(
-                "Apollo mmWave: rejected update with invalid location: %s",
+                "Apollo mmWave: rejected update with invalid device id: %s",
                 location_raw,
             )
             return
 
-        location = location_raw.strip()
+        device_id = location_raw.strip()
         zone_id = call.data.get("zone_id")
         shape = call.data.get("shape")
         data = call.data.get("data")
@@ -281,56 +280,56 @@ def _build_update_zone_handler(
         delete_zone = bool(call.data.get("delete"))
 
         store = get_store(hass)
-        loc = store.location(location)
+        device = store.device(device_id)
 
         if rotation is not None:
-            loc[ATTR_ROTATION_DEG] = rotation
+            device[ATTR_ROTATION_DEG] = rotation
 
         if entities is not None:
-            loc[STORE_ENTITIES] = entities
+            device[STORE_ENTITIES] = entities
 
         if delete_zone and zone_id is not None:
-            loc[STORE_ZONES].pop(zone_id, None)
-            _remove_zone_entities(hass, location, zone_id)
-            _notify_zones_updated(hass, location)
+            device[STORE_ZONES].pop(zone_id, None)
+            _remove_zone_entities(hass, device_id, zone_id)
+            _notify_zones_updated(hass, device_id)
             return
 
         if zone_id is None or shape is None:
             # Rotation/entities-only update, or a rename without geometry.
             if zone_id is not None and zone_name is not None:
-                zone_entry = store.zone(location, zone_id)
+                zone_entry = store.zone(device_id, zone_id)
                 if zone_entry is not None:
                     zone_entry[ATTR_NAME] = zone_name
-                    _update_registry_names(hass, location, zone_id, zone_name)
-            _notify_zones_updated(hass, location)
+                    _update_registry_names(hass, device_id, zone_id, zone_name)
+            _notify_zones_updated(hass, device_id)
             return
 
         if shape not in SUPPORTED_SHAPES:
             _LOGGER.debug(
-                "Apollo mmWave: unsupported shape '%s' for location '%s'",
+                "Apollo mmWave: unsupported shape '%s' for device '%s'",
                 shape,
-                location,
+                device_id,
             )
             return
 
         zone_entry = {
             ATTR_SHAPE: shape,
-            ATTR_DATA: _normalize_zone_payload(shape, data, zone_id, location),
+            ATTR_DATA: _normalize_zone_payload(shape, data, zone_id, device_id),
         }
 
         if zone_name is not None:
             zone_entry[ATTR_NAME] = zone_name
         else:
-            existing = store.zone(location, zone_id)
+            existing = store.zone(device_id, zone_id)
             if existing is not None and isinstance(existing.get(ATTR_NAME), str):
                 zone_entry[ATTR_NAME] = existing[ATTR_NAME]
 
-        loc[STORE_ZONES][zone_id] = zone_entry
+        device[STORE_ZONES][zone_id] = zone_entry
 
         if zone_name is not None:
-            _update_registry_names(hass, location, zone_id, zone_name)
+            _update_registry_names(hass, device_id, zone_id, zone_name)
 
-        _notify_zones_updated(hass, location)
+        _notify_zones_updated(hass, device_id)
 
     return handle_update_zone
 

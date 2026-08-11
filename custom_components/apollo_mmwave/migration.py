@@ -6,17 +6,9 @@ the coordinate sensor's RestoreEntity attributes; the set of zones was
 re-derived at boot by parsing entity friendly names. 1.2.0 moves the source of
 truth into ``ZoneStore`` (``.storage/apollo_mmwave.zones``).
 
-This module runs only when no store file exists yet:
-
-1. Rebuild each location's zones/entities/rotation from the entity registry +
-   the restore-state cache of the old coordinate sensors.
-2. Rename registry entity_ids to ``<domain>.<unique_id>`` (i.e.
-   ``sensor.apollo_mmwave_<location>_zone_<n>``). The vendored
-   zone-mapper-card reads the coordinate sensors by constructing exactly that
-   id, but the legacy entities were named "Zone Mapper …", which HA slugged
-   into ``sensor.zone_mapper_*`` — so the card's zone restore never found
-   them. New entities get the right id via ``suggested_object_id``; existing
-   registry entries keep their pinned id unless renamed here.
+This module runs only when no store file exists yet: it rebuilds each
+location's zones/entities/rotation from the entity registry plus the
+restore-state cache of the old coordinate sensors.
 """
 
 from __future__ import annotations
@@ -112,23 +104,8 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
             continue
 
         # The restore-state cache is keyed by the entity_id the state was
-        # saved under — read it before any rename.
-        legacy_entity_id = entry.entity_id
-        attributes = _restored_attributes(hass, legacy_entity_id) or {}
-
-        # Point every legacy entity_id at <domain>.<unique_id> so the card's
-        # constructed lookups work (applies to coordinate + presence sensors).
-        expected_entity_id = f"{entry.domain}.{entry.unique_id}"
-        if (
-            legacy_entity_id != expected_entity_id
-            and registry.async_get(expected_entity_id) is None
-        ):
-            registry.async_update_entity(
-                legacy_entity_id, new_entity_id=expected_entity_id
-            )
-            _LOGGER.info(
-                "Apollo mmWave: migrated %s -> %s", legacy_entity_id, expected_entity_id
-            )
+        # saved under.
+        attributes = _restored_attributes(hass, entry.entity_id) or {}
 
         if entry.domain != "sensor":
             continue
@@ -137,7 +114,11 @@ async def async_migrate_legacy(hass: HomeAssistant, store: ZoneStore) -> None:
             continue
         slug, zone_id = parsed
         location = _derive_location_name(entry, slug)
-        loc = store.location(location)
+        # The store is keyed by device id and this legacy data only knows a
+        # display name, so it goes to orphans, the same place the v1 store
+        # migration puts locations it cannot resolve. Nothing here resolves a
+        # device yet; that arrives with the rewrite of this module.
+        loc = store.orphans.setdefault(location, {STORE_ZONES: {}, STORE_ENTITIES: []})
         shape = attributes.get(ATTR_SHAPE)
         if shape is not None:
             zone_def: dict[str, Any] = {

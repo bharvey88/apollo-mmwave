@@ -1,10 +1,11 @@
 """
-Coordinate sensor platform for Apollo mmWave.
+Zone geometry sensor platform for Apollo mmWave.
 
-One sensor per zone; the vendored zone-mapper-card reads the zone geometry
-back from this entity's attributes by constructing
-``sensor.apollo_mmwave_<location_slug>_zone_<id>`` — the entity_id set here is
-part of the card's wire contract, not a cosmetic choice.
+One sensor per drawn zone, carrying the zone's shape and data as attributes.
+Its identity is the radar's Home Assistant device id plus the zone id, and it
+is registered against that device, so it shows up on the radar's device page
+and users can rename it however they like. Nothing builds an entity id from a
+display name any more: consumers find these entities through the device.
 """
 
 from __future__ import annotations
@@ -14,15 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.util import slugify
 
 from .const import (
     ATTR_DATA,
     ATTR_NAME,
     ATTR_ROTATION_DEG,
     ATTR_SHAPE,
-    COORD_SENSOR_UNIQUE_ID_FMT,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
     STORE_ZONES,
@@ -43,7 +43,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create coordinate sensors for stored zones, and for zones added later."""
+    """Create geometry sensors for stored zones, and for zones added later."""
     from . import get_store  # noqa: PLC0415 - avoid a module import cycle
 
     store = get_store(hass)
@@ -51,23 +51,23 @@ async def async_setup_entry(
 
     def _sync_entities() -> None:
         current = {
-            (location, zone_id)
-            for location, loc in store.locations.items()
-            for zone_id in loc[STORE_ZONES]
+            (device_id, zone_id)
+            for device_id, device in store.devices.items()
+            for zone_id in device[STORE_ZONES]
         }
         # Deleted zones' entities are removed via the registry; drop them from
         # the tracker so a re-created zone id gets a fresh entity.
         added.intersection_update(current)
         new_entities = [
-            ZoneCoordsSensor(store, location, zone_id)
-            for location, zone_id in sorted(current - added)
+            ZoneCoordsSensor(hass, store, device_id, zone_id)
+            for device_id, zone_id in sorted(current - added)
         ]
         added.update(current - added)
         if new_entities:
             async_add_entities(new_entities)
 
     @callback
-    def _zones_updated(_location: str) -> None:
+    def _zones_updated(_device_id: str) -> None:
         _sync_entities()
 
     entry.async_on_unload(
@@ -81,18 +81,22 @@ class ZoneCoordsSensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_icon = "mdi:vector-rectangle"
+    _attr_has_entity_name = True
 
-    def __init__(self, store: ZoneStore, location: str, zone_id: int) -> None:
+    def __init__(
+        self, hass: HomeAssistant, store: ZoneStore, device_id: str, zone_id: int
+    ) -> None:
         """Initialize from the store; state is the zone id."""
         self._store = store
-        self._location = location
+        self._device_id = device_id
         self._zone_id = zone_id
-        self._attr_name = f"Apollo mmWave {location} Zone {zone_id}"
-        self._attr_unique_id = COORD_SENSOR_UNIQUE_ID_FMT.format(
-            location=slugify(location), zone_id=zone_id
-        )
-        # Card contract: it looks the sensor up by this exact entity_id.
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self._attr_name = f"Zone {zone_id}"
+        self._attr_unique_id = f"{device_id}_zone_{zone_id}"
+        # Set before the entity reaches the platform so the registry entry is
+        # created already linked to the radar. Attaching afterwards would leave
+        # the first entity id and friendly name derived from a device-less
+        # entity, which is what this rework exists to stop.
+        self.device_entry = dr.async_get(hass).async_get(device_id)
 
     @property
     def native_value(self) -> int:
@@ -101,15 +105,15 @@ class ZoneCoordsSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return shape/data plus location-wide entities and rotation."""
-        loc = self._store.location(self._location)
-        zone_def = self._store.zone(self._location, self._zone_id) or {}
+        """Return shape/data plus the device-wide entities and rotation."""
+        device = self._store.device(self._device_id)
+        zone_def = self._store.zone(self._device_id, self._zone_id) or {}
         attrs: dict[str, Any] = {
             ATTR_SHAPE: zone_def.get(ATTR_SHAPE),
             ATTR_DATA: zone_def.get(ATTR_DATA),
-            "entities": loc.get(STORE_ENTITIES, []),
+            "entities": device.get(STORE_ENTITIES, []),
         }
-        rotation = loc.get(ATTR_ROTATION_DEG)
+        rotation = device.get(ATTR_ROTATION_DEG)
         if rotation is not None:
             attrs[ATTR_ROTATION_DEG] = rotation
         name = zone_def.get(ATTR_NAME)
@@ -118,11 +122,11 @@ class ZoneCoordsSensor(SensorEntity):
         return attrs
 
     async def async_added_to_hass(self) -> None:
-        """Refresh whenever this location's zones change."""
+        """Refresh whenever this device's zones change."""
 
         @callback
-        def _zones_updated(location: str) -> None:
-            if location == self._location:
+        def _zones_updated(device_id: str) -> None:
+            if device_id == self._device_id:
                 self.async_write_ha_state()
 
         self.async_on_remove(

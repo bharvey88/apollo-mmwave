@@ -41,7 +41,9 @@ def _register_legacy_entities(hass) -> None:
 
 
 async def test_migrates_restore_state_into_store(hass, config_entry) -> None:
-    """Legacy zone data lands in the store with the display location intact."""
+    """Legacy zone data is preserved, keyed by the display location it had."""
+    # Legacy data knows a name, not a device, so it lands in orphans until the
+    # rewrite of migration.py resolves these to devices.
     _register_legacy_entities(hass)
     mock_restore_cache(
         hass, [State("sensor.zone_mapper_office_zone_1", "1", LEGACY_ATTRS)]
@@ -49,15 +51,15 @@ async def test_migrates_restore_state_into_store(hass, config_entry) -> None:
 
     await setup_integration(hass, config_entry)
 
-    loc = get_store(hass).location("Office")
+    loc = get_store(hass).orphans["Office"]
     assert loc[STORE_ZONES][1]["shape"] == "rect"
     assert loc[STORE_ZONES][1]["name"] == "Desk"
     assert loc["entities"] == [{"x": "sensor.t1x", "y": "sensor.t1y"}]
     assert loc["rotation_deg"] == 15
 
 
-async def test_migrates_entity_ids_to_card_contract(hass, config_entry) -> None:
-    """Legacy entity_ids are renamed to <domain>.<unique_id> for the card."""
+async def test_legacy_entity_ids_are_left_alone(hass, config_entry) -> None:
+    """Entity ids are nobody's contract now, so migration must not rewrite them."""
     _register_legacy_entities(hass)
     mock_restore_cache(
         hass, [State("sensor.zone_mapper_office_zone_1", "1", LEGACY_ATTRS)]
@@ -68,18 +70,8 @@ async def test_migrates_entity_ids_to_card_contract(hass, config_entry) -> None:
     registry = er.async_get(hass)
     assert (
         registry.async_get_entity_id("sensor", DOMAIN, "apollo_mmwave_office_zone_1")
-        == "sensor.apollo_mmwave_office_zone_1"
+        == "sensor.zone_mapper_office_zone_1"
     )
-    assert (
-        registry.async_get_entity_id(
-            "binary_sensor", DOMAIN, "apollo_mmwave_office_zone_1_presence"
-        )
-        == "binary_sensor.apollo_mmwave_office_zone_1_presence"
-    )
-    # The migrated zone is live under the new id.
-    state = hass.states.get("sensor.apollo_mmwave_office_zone_1")
-    assert state is not None
-    assert state.attributes["name"] == "Desk"
 
 
 async def test_migration_skipped_when_store_exists(
@@ -97,4 +89,6 @@ async def test_migration_skipped_when_store_exists(
 
     await setup_integration(hass, config_entry)
 
-    assert get_store(hass).locations == {}
+    store = get_store(hass)
+    assert store.devices == {}
+    assert store.orphans == {}

@@ -9,7 +9,7 @@ SERVICE_UPDATE_ZONE = "update_zone"
 # Event names (public bus event, part of the integration's API surface)
 EVENT_ZONE_UPDATED = f"{DOMAIN}_zone_updated"
 
-# Internal dispatcher signal fired with the location name on any zone change.
+# Internal dispatcher signal fired with the device id on any zone change.
 SIGNAL_ZONES_UPDATED = f"{DOMAIN}_zones_updated"
 
 # hass.data keys
@@ -49,10 +49,6 @@ SUPPORTED_SHAPES = (SHAPE_NONE, SHAPE_RECT, SHAPE_ELLIPSE, SHAPE_POLYGON)
 # Limits / defaults
 POLYGON_MAX_POINTS = 32
 POLYGON_MIN_POINTS = 3
-
-# Sensor / entity naming fragments
-COORD_SENSOR_UNIQUE_ID_FMT = "apollo_mmwave_{location}_zone_{zone_id}"
-PRESENCE_SENSOR_UNIQUE_ID_FMT = "apollo_mmwave_{location}_zone_{zone_id}_presence"
 
 # The zone-drawing card this integration bundles (vendored from zone-mapper-card).
 CARD_TYPE = "custom:zone-mapper-card"

@@ -16,9 +16,13 @@ SIGNAL_ZONES_UPDATED = f"{DOMAIN}_zones_updated"
 DATA_STORE = "store"
 DATA_ASSETS_REGISTERED = "assets_registered"
 
-# Location store keys
+# Store keys (v2). Zones are keyed by Home Assistant device id, which survives
+# renames. `label` is display only and never used to build an identifier.
 STORE_ZONES = "zones"
 STORE_ENTITIES = "entities"
+STORE_DEVICES = "devices"
+STORE_ORPHANS = "orphans"
+STORE_LABEL = "label"
 
 # Attribute / data keys. Persisted coordinates are rounded to whole mm
 ATTR_SHAPE = "shape"

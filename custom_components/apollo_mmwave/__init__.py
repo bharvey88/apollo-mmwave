@@ -568,6 +568,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=UPDATE_ZONE_SERVICE_SCHEMA,
     )
 
+    # How the card reads its configuration. Registering the commands is
+    # idempotent and they are never unregistered (Home Assistant has no API for
+    # it), so the teardown only closes the subscriptions this entry owns.
+    from .websocket import async_register as async_register_websocket  # noqa: PLC0415
+
+    entry.async_on_unload(async_register_websocket(hass))
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # `frontend`, `http`, and `lovelace` are manifest dependencies, so they are

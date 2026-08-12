@@ -197,7 +197,7 @@ def _parse_entry(raw: Any) -> dict[str, Any] | None:
         for zone_key, zone_def in zones.items():
             try:
                 zone_id = int(zone_key)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
             if isinstance(zone_def, dict):
                 entry[STORE_ZONES][zone_id] = zone_def

@@ -87,7 +87,7 @@ def _coerce_float(value: Any) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -96,7 +96,7 @@ def _sanitize_rotation(rotation: Any) -> int | None:
         return None
     try:
         value = round(float(rotation))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return max(-180, min(180, value))
 

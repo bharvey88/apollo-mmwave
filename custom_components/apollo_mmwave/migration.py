@@ -66,7 +66,7 @@ def _parse_sensor_unique_id(unique_id: str) -> tuple[str, int] | None:
     slug, _, zone_str = slug_and_zone.rpartition("_zone_")
     try:
         return slug, int(zone_str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

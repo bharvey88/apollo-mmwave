@@ -65,7 +65,7 @@ def _coerce_float(value: Any) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -320,7 +320,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         try:
             x_val = float(x_state.state)  # type: ignore[union-attr]
             y_val = float(y_state.state)  # type: ignore[union-attr]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         # Ignore origin (0,0) so default or uninitialized readings are skipped.
         if x_val == 0.0 and y_val == 0.0:

@@ -194,7 +194,7 @@ async def _async_register_lovelace_resources(
             )
         else:
             _LOGGER.debug("Apollo mmWave: Lovelace resources already current.")
-    except Exception:  # noqa: BLE001
+    except Exception:
         _LOGGER.warning(
             "Apollo mmWave: could not register Lovelace resources; the"
             " dashboard/cards won't load in browsers with a cached app shell"
@@ -382,7 +382,7 @@ async def async_register_dashboard(
         # async_save fires the lovelace_updated event, so open tabs pick up a
         # changed device selection without a reload.
         await dashboard.async_save(desired)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _LOGGER.warning(
             "Apollo mmWave: could not register the dashboard; continuing without"
             " it. You can add a dashboard with strategy type '%s' manually.",
@@ -422,7 +422,7 @@ async def async_remove_dashboard(hass: HomeAssistant) -> None:
             return
         await collection.async_delete_item(item["id"])
         _LOGGER.info("Apollo mmWave: removed the '%s' dashboard.", DASHBOARD_TITLE)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _LOGGER.warning(
             "Apollo mmWave: could not remove the dashboard; it may remain in"
             " the sidebar until Home Assistant restarts.",

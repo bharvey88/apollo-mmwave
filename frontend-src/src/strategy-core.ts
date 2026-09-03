@@ -5,7 +5,7 @@ import {
   entityMapFromDevice,
 } from "./entities";
 import { ld2450EntityIds } from "./ld2450";
-import { apolloModelInfo, type RadarProfile } from "./profiles";
+import { apolloModelInfo, isEsphomeDevice, type RadarProfile } from "./profiles";
 import { hasLd2450, hasLd2450Device, zoneMapCard } from "./ld2450";
 import {
   controlRows,
@@ -108,7 +108,9 @@ function deviceFromId(
   const d = hass.devices[deviceId];
   if (forced && !d) return undefined; // selection points at a deleted device
   // Registry-first: manufacturer/model survive entity renames and `_2` dedup.
-  const reg = apolloModelInfo(d);
+  // Only for an ESPHome device, though: a network integration's copy of the
+  // same hardware carries the same strings and must not become a second tab.
+  const reg = isEsphomeDevice(hass, deviceId) ? apolloModelInfo(d) : undefined;
   const base = baseNameFromDevice(hass, deviceId);
   if (!forced && !reg && !base) return undefined;
 

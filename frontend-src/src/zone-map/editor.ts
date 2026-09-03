@@ -20,7 +20,7 @@
 
 import { registerElement } from "../register";
 import { hasLd2450Device } from "../ld2450";
-import { apolloModelInfo } from "../profiles";
+import { apolloModelInfo, isEsphomeDevice } from "../profiles";
 import type { HomeAssistant } from "../types";
 
 export const ZONE_MAP_CARD_TYPE = "custom:apollo-radar-zone-map-card";
@@ -175,7 +175,8 @@ export class ZoneMapCardEditor extends HTMLElement {
       !!this._hass &&
       !!device?.id &&
       (hasLd2450Device(this._hass, device.id) ||
-        (apolloModelInfo(this._hass.devices?.[device.id])?.ld2450 ?? false));
+        (isEsphomeDevice(this._hass, device.id) &&
+          (apolloModelInfo(this._hass.devices?.[device.id])?.ld2450 ?? false)));
     picker.addEventListener("value-changed", (event: Event) => {
       const value = (event as CustomEvent).detail?.value;
       this._commit("device_id", typeof value === "string" ? value : "");

@@ -105,14 +105,18 @@ describe("registry-first detectRadarDevices", () => {
     expect(detectRadarDevices(hass)[0].profile?.key).toBe("ld2410");
   });
 
-  it("lists a registry device whose entities haven't registered yet as offline", () => {
-    // Device-add race: the registry event lands before the entities. The tab
-    // appears at once (offline note); the later entities update flips the
-    // device key, so the strategy still regenerates with the real cards.
+  it("waits for a registry device's entities before listing it", () => {
+    // Device-add race: the registry event lands before the entities. With no
+    // entity to say which integration owns the device, it could as well be a
+    // network integration's copy, so it waits; the later entities update
+    // flips the device key and the strategy regenerates with the tab.
     const hass = hassWith([], apollo("MSR-2"));
-    const devices = detectRadarDevices(hass);
+    expect(detectRadarDevices(hass)).toHaveLength(0);
+    const ready = hassWith(["sensor.completely_renamed"], apollo("MSR-2"));
+    ready.entities["sensor.completely_renamed"].platform = "esphome";
+    const devices = detectRadarDevices(ready);
     expect(devices).toHaveLength(1);
-    expect(devices[0].online).toBe(false);
+    expect(devices[0].online).toBe(true);
     expect(devices[0].profile?.key).toBe("ld2410");
   });
 

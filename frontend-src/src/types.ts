@@ -6,7 +6,9 @@ export interface HassEntity {
 
 export interface HomeAssistant {
   states: Record<string, HassEntity>;
-  entities: Record<string, { device_id?: string }>;
+  /** `platform` is the integration that owns the entity (HA sends it to the
+   *  frontend as `pl`); older frontends may omit it. */
+  entities: Record<string, { device_id?: string; platform?: string }>;
   devices: Record<
     string,
     {

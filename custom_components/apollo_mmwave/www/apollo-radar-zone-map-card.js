@@ -258,6 +258,18 @@ function apolloModelInfo(device) {
   const hit = APOLLO_MODELS.find((m) => model.startsWith(m.prefix));
   return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : void 0;
 }
+function isEsphomeDevice(hass, deviceId) {
+  let sawEntity = false;
+  let sawPlatform = false;
+  for (const e of Object.values(hass.entities)) {
+    if (e.device_id !== deviceId) continue;
+    sawEntity = true;
+    if (e.platform === void 0) continue;
+    sawPlatform = true;
+    if (e.platform === "esphome") return true;
+  }
+  return sawEntity && !sawPlatform;
+}
 const ZONE_MAP_CARD_TYPE = "custom:apollo-radar-zone-map-card";
 const ZONE_MAP_EDITOR_TAG = "apollo-radar-zone-map-card-editor";
 function themeChoiceFromConfig(config) {
@@ -330,7 +342,7 @@ class ZoneMapCardEditor extends HTMLElement {
     picker.label = "Radar";
     picker.deviceFilter = (device) => {
       var _a, _b;
-      return !!this._hass && !!(device == null ? void 0 : device.id) && (hasLd2450Device(this._hass, device.id) || (((_b = apolloModelInfo((_a = this._hass.devices) == null ? void 0 : _a[device.id])) == null ? void 0 : _b.ld2450) ?? false));
+      return !!this._hass && !!(device == null ? void 0 : device.id) && (hasLd2450Device(this._hass, device.id) || isEsphomeDevice(this._hass, device.id) && (((_b = apolloModelInfo((_a = this._hass.devices) == null ? void 0 : _a[device.id])) == null ? void 0 : _b.ld2450) ?? false));
     };
     picker.addEventListener("value-changed", (event) => {
       var _a;

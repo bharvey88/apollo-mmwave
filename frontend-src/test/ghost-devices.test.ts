@@ -14,7 +14,7 @@ import {
 } from "../src/strategy-core";
 import type { HassEntity, HomeAssistant } from "../src/types";
 
-type Entities = Record<string, { device_id?: string }>;
+type Entities = Record<string, { device_id?: string; platform?: string }>;
 type States = Record<string, HassEntity>;
 
 function hassWith(
@@ -71,11 +71,24 @@ describe("ghost/offline device filtering", () => {
     expect(detectRadarDevices(hass)[0].online).toBe(false);
   });
 
-  it("keeps a registry-matched device with zero entities (add race), offline", () => {
+  it("waits for entities before listing a registry-matched device (add race)", () => {
     const hass = hassWith({}, {}, { mtr: MTR_DEVICE });
-    const devices = detectRadarDevices(hass);
-    expect(devices).toHaveLength(1);
-    expect(devices[0].online).toBe(false);
+    expect(detectRadarDevices(hass)).toHaveLength(0);
+  });
+
+  it("ignores another integration's copy of a radar (same manufacturer and model)", () => {
+    // UniFi tracks the same hardware by MAC and creates its own device entry
+    // with the Apollo strings copied onto it. Seen live: three such copies
+    // turned six tabs into nine.
+    const tracker = "device_tracker.dining_room_mmwave_sensor";
+    const real = mtrFixture("1200");
+    for (const e of Object.values(real.entities)) (e as any).platform = "esphome";
+    const hass = hassWith(
+      { ...real.states, [tracker]: state(tracker, "home") },
+      { ...real.entities, [tracker]: { device_id: "copy", platform: "unifi" } },
+      { mtr: MTR_DEVICE, copy: { ...MTR_DEVICE }, bare: { ...MTR_DEVICE } }
+    );
+    expect(detectRadarDevices(hass).map((d) => d.deviceId)).toEqual(["mtr"]);
   });
 
   it("detects a live MTR-1 with no offline note", () => {

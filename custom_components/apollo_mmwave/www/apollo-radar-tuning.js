@@ -696,6 +696,18 @@ function apolloModelInfo(device) {
   const hit = APOLLO_MODELS.find((m2) => model.startsWith(m2.prefix));
   return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : void 0;
 }
+function isEsphomeDevice(hass, deviceId) {
+  let sawEntity = false;
+  let sawPlatform = false;
+  for (const e2 of Object.values(hass.entities)) {
+    if (e2.device_id !== deviceId) continue;
+    sawEntity = true;
+    if (e2.platform === void 0) continue;
+    sawPlatform = true;
+    if (e2.platform === "esphome") return true;
+  }
+  return sawEntity && !sawPlatform;
+}
 function detectProfile(hass, base) {
   for (const p2 of PROFILES) {
     const id = p2.entityMap(base).engineering_mode;
@@ -1605,7 +1617,7 @@ function hasLiveRadarEvidence(hass, deviceId, registryMatched) {
 function deviceFromId(hass, deviceId, forced = false) {
   const d2 = hass.devices[deviceId];
   if (forced && !d2) return void 0;
-  const reg = apolloModelInfo(d2);
+  const reg = isEsphomeDevice(hass, deviceId) ? apolloModelInfo(d2) : void 0;
   const base = baseNameFromDevice(hass, deviceId);
   if (!forced && !reg && !base) return void 0;
   const online = hasLiveRadarEvidence(hass, deviceId, !!reg);
@@ -1900,7 +1912,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "2.1.0";
+const CARD_VERSION = "2.1.1";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

@@ -173,6 +173,30 @@ export function apolloModelInfo(device?: {
   return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : undefined;
 }
 
+/**
+ * Whether a device is (as far as the frontend can tell) an ESPHome device.
+ *
+ * A network integration that tracks the same hardware by MAC (UniFi, say)
+ * creates its OWN device entry and copies the manufacturer and model strings
+ * onto it, so a registry match alone puts a phantom radar on the dashboard for
+ * every real one. HA sends each entity's owning platform to the frontend;
+ * one `esphome` entity settles it. A device whose entities carry no platform
+ * at all (an older frontend) is given the benefit of the doubt; a device with
+ * no entities is not, so a bare copy with nothing but a MAC never qualifies.
+ */
+export function isEsphomeDevice(hass: HomeAssistant, deviceId: string): boolean {
+  let sawEntity = false;
+  let sawPlatform = false;
+  for (const e of Object.values(hass.entities)) {
+    if (e.device_id !== deviceId) continue;
+    sawEntity = true;
+    if (e.platform === undefined) continue;
+    sawPlatform = true;
+    if (e.platform === "esphome") return true;
+  }
+  return sawEntity && !sawPlatform;
+}
+
 /** Pick the profile whose engineering-mode switch exists for this device. */
 export function detectProfile(
   hass: HomeAssistant,

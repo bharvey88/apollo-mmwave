@@ -175,15 +175,28 @@ describe("zone map card editor changes", () => {
 });
 
 describe("zone map card editor device filter", () => {
-  it("offers a registry-matched Apollo LD2450 model whose entities are not in yet", () => {
+  it("offers a registry-matched Apollo LD2450 model whose target entities are not in yet", () => {
     const editor = mountEditor({ device_id: "" });
     const hass = fakeHass();
     hass.devices.fresh = { name: "Apollo MTR-1 aabbcc", manufacturer: "ApolloAutomation", model: "MTR-1" };
+    hass.entities["binary_sensor.apollo_mtr_1_aabbcc_online"] = { device_id: "fresh", platform: "esphome" };
+    hass.devices.bare = { ...hass.devices.fresh };
     hass.devices.msr = { name: "Apollo MSR-2 aabbcc", manufacturer: "ApolloAutomation", model: "MSR-2" };
     editor.hass = hass;
     expect(picker(editor).deviceFilter({ id: "fresh" })).toBe(true);
+    // Nothing at all registered yet: could be anyone's copy of the hardware.
+    expect(picker(editor).deviceFilter({ id: "bare" })).toBe(false);
     // An MSR-2 has no LD2450, so it can never draw.
     expect(picker(editor).deviceFilter({ id: "msr" })).toBe(false);
+  });
+
+  it("does not offer another integration's copy of a radar", () => {
+    const editor = mountEditor({ device_id: "" });
+    const hass = fakeHass();
+    hass.devices.copy = { name: "Apollo MTR-1 cbbdb4", manufacturer: "ApolloAutomation", model: "MTR-1" };
+    hass.entities["device_tracker.apollo_mtr_1_cbbdb4"] = { device_id: "copy", platform: "unifi" };
+    editor.hass = hass;
+    expect(picker(editor).deviceFilter({ id: "copy" })).toBe(false);
   });
 
   it("offers an MTR-1 named the way its firmware names it", () => {

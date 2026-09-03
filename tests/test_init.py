@@ -423,7 +423,8 @@ async def test_zone_rename_updates_generated_names_only(
     await _create_rect_zone(hass, device_id)
     registry = er.async_get(hass)
     sensor_eid, presence_eid = _zone_entity_ids(hass, device_id)
-    assert sensor_eid and presence_eid
+    assert sensor_eid
+    assert presence_eid
 
     async def rename(name: str) -> None:
         await hass.services.async_call(

@@ -25,6 +25,21 @@ from .const import (
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
+# The device selector matches `model` exactly, and each firmware image carries
+# its own project name (`MSR-2_BLE`, `MSR-2_Factory`), so every variant has to
+# be listed. The MTR-1 images all report `MTR-1`.
+MMWAVE_MODELS = (
+    "MSR-1",
+    "MSR-1_BLE",
+    "MSR-1_Factory",
+    "MSR-2",
+    "MSR-2_BLE",
+    "MSR-2_Factory",
+    "MTR-1",
+    "R-PRO-1-W",
+    "R-PRO-1-ETH",
+)
+
 
 class ApolloMmwaveConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow to create a single Apollo mmWave entry."""
@@ -111,13 +126,7 @@ class ApolloMmwaveOptionsFlow(config_entries.OptionsFlow):
                                 manufacturer="ApolloAutomation",
                                 model=model,
                             )
-                            for model in (
-                                "MSR-1",
-                                "MSR-2",
-                                "MTR-1",
-                                "R-PRO-1-W",
-                                "R-PRO-1-ETH",
-                            )
+                            for model in MMWAVE_MODELS
                         ],
                     )
                 ),

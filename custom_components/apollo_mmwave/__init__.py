@@ -228,24 +228,32 @@ def _zone_entity_unique_ids(device_id: str, zone_id: int) -> tuple[str, str]:
     )
 
 
+def _is_generated_name(name: str | None, base: str) -> bool:
+    """Report whether a registry name is one this integration wrote."""
+    return name is None or name == base or name.startswith(f"{base} - ")
+
+
 def _update_registry_names(
     hass: HomeAssistant, device_id: str, zone_id: int, zone_name: str
 ) -> None:
+    # The registry `name` is the same field the entity settings dialog edits.
+    # A name the user typed there is theirs: a zone rename only rewrites a
+    # name that is still one of ours, so "Kitchen door" stays "Kitchen door".
     registry = er.async_get(hass)
     sensor_uid, presence_uid = _zone_entity_unique_ids(device_id, zone_id)
 
-    sensor_eid = registry.async_get_entity_id("sensor", DOMAIN, sensor_uid)
-    if sensor_eid:
-        base = f"Zone {zone_id}"
+    for domain, unique_id, base in (
+        ("sensor", sensor_uid, f"Zone {zone_id}"),
+        ("binary_sensor", presence_uid, f"Zone {zone_id} presence"),
+    ):
+        entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+        if not entity_id:
+            continue
+        entry = registry.async_get(entity_id)
+        if entry is not None and not _is_generated_name(entry.name, base):
+            continue
         registry.async_update_entity(
-            sensor_eid, name=f"{base} - {zone_name}" if zone_name else base
-        )
-
-    presence_eid = registry.async_get_entity_id("binary_sensor", DOMAIN, presence_uid)
-    if presence_eid:
-        base = f"Zone {zone_id} presence"
-        registry.async_update_entity(
-            presence_eid, name=f"{base} - {zone_name}" if zone_name else base
+            entity_id, name=f"{base} - {zone_name}" if zone_name else base
         )
 
 

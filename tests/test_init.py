@@ -413,3 +413,34 @@ async def test_delete_without_zone_id_changes_nothing(
 
     assert device_id not in get_store(hass).devices
     assert "without a zone_id" in caplog.text
+
+
+async def test_zone_rename_updates_generated_names_only(
+    hass, init_integration, device_id
+) -> None:
+    """A name the user typed in the entity settings dialog survives a rename."""
+    _ = init_integration
+    await _create_rect_zone(hass, device_id)
+    registry = er.async_get(hass)
+    sensor_eid, presence_eid = _zone_entity_ids(hass, device_id)
+    assert sensor_eid and presence_eid
+
+    async def rename(name: str) -> None:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_UPDATE_ZONE,
+            {"device_id": device_id, "zone_id": 1, "name": name},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    # Nothing typed yet: both names are ours to write.
+    await rename("Couch")
+    assert registry.async_get(sensor_eid).name == "Zone 1 - Couch"
+    assert registry.async_get(presence_eid).name == "Zone 1 presence - Couch"
+
+    # The user renames the presence entity by hand, then renames the zone.
+    registry.async_update_entity(presence_eid, name="Kitchen door")
+    await rename("Sofa")
+    assert registry.async_get(sensor_eid).name == "Zone 1 - Sofa"
+    assert registry.async_get(presence_eid).name == "Kitchen door"

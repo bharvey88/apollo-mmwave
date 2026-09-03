@@ -75,6 +75,40 @@ async def test_resolve_target_pairs_skips_unpaired_and_tolerates_dedup_suffix(
     ]
 
 
+async def test_resolve_target_pairs_accepts_mtr1_firmware_naming(
+    hass, entity_registry, device_registry
+) -> None:
+    """The MTR-1 firmware names its targets "Target-1 X", with no LD2450 prefix."""
+    device = _make_radar(hass, device_registry, "MTR-1")
+    for suffix in ("target_1_x", "target_1_y", "target_3_x", "target_3_y"):
+        entity_registry.async_get_or_create(
+            "sensor",
+            "esphome",
+            suffix,
+            device_id=device.id,
+            suggested_object_id=f"apollo_mtr_1_cbbdb4_{suffix}",
+        )
+    # Not a coordinate, and must not be mistaken for one.
+    entity_registry.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "presence",
+        device_id=device.id,
+        suggested_object_id="apollo_mtr_1_cbbdb4_radar_target",
+    )
+
+    assert resolve_target_pairs(hass, device.id) == [
+        {
+            "x": "sensor.apollo_mtr_1_cbbdb4_target_1_x",
+            "y": "sensor.apollo_mtr_1_cbbdb4_target_1_y",
+        },
+        {
+            "x": "sensor.apollo_mtr_1_cbbdb4_target_3_x",
+            "y": "sensor.apollo_mtr_1_cbbdb4_target_3_y",
+        },
+    ]
+
+
 async def test_resolve_target_pairs_ignores_other_devices(
     hass, entity_registry, device_registry
 ) -> None:

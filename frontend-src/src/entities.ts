@@ -15,6 +15,8 @@ const KNOWN_SUFFIXES: RegExp[] = [
   // LD2450 tracking radar — every entity is `{base}_ld2450_...`. Needed so
   // zone-only devices (e.g. MTR-1, no gate radar) still resolve to a base name.
   /_ld2450_.+$/,
+  // MTR-1 firmware names its target sensors "Target-1 X" with no chip prefix.
+  /_target_\d+_[xy](?:_\d+)?$/,
   // LD2410 (MSR) — varied prefixes.
   /_radar_engineering_mode$/,
   /_ld2410_bluetooth$/,

@@ -27,9 +27,11 @@ export function ld2450TargetPairs(base: string): Ld2450TargetPair[] {
 
 // Suffix-matched against actual entity ids so renamed prefixes and HA's `_2`
 // dedup suffix don't break detection. The target number sits before the dedup
-// digits, so it can't be misread.
-const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
-const TARGET_Y = /_ld2450_target_(\d+)_y(?:_\d+)?$/;
+// digits, so it can't be misread. The R-PRO-1 firmware names the sensors
+// "LD2450 Target-1 X"; the MTR-1 firmware names them "Target-1 X" with no chip
+// prefix, so the prefix is optional. Keep in sync with ld2450.py.
+const TARGET_X = /(?:_ld2450)?_target_(\d+)_x(?:_\d+)?$/;
+const TARGET_Y = /(?:_ld2450)?_target_(\d+)_y(?:_\d+)?$/;
 
 /** Every LD2450 target coordinate entity of a device, paired or not (a lone
  *  X with its Y disabled still counts as radar evidence). */
@@ -53,9 +55,14 @@ export function hasLd2450Device(hass: HomeAssistant, deviceId: string): boolean 
   return false;
 }
 
-/** Base-name fallback: true when constructed target ids exist in states. */
+/** Base-name fallback: true when constructed target ids exist in states,
+ *  in either the R-PRO-1 (`_ld2450_target_1_x`) or MTR-1 (`_target_1_x`)
+ *  spelling. */
 export function hasLd2450(hass: HomeAssistant, base: string): boolean {
-  return ld2450TargetPairs(base).some((p) => p.x in hass.states);
+  return (
+    ld2450TargetPairs(base).some((p) => p.x in hass.states) ||
+    [1, 2, 3].some((n) => `sensor.${base}_target_${n}_x` in hass.states)
+  );
 }
 
 /**

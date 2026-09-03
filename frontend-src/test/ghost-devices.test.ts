@@ -150,3 +150,27 @@ describe("ghost/offline device filtering", () => {
     expect(devices[0].profile?.key).toBe("ld2410");
   });
 });
+
+describe("MTR-1 firmware entity naming", () => {
+  // Shipped MTR-1 firmware names the target sensors "Target-1 X" (no LD2450
+  // prefix). Before 2.0.1 nothing recognised them: the tab appeared only via
+  // the registry model, and the zone card had no targets to draw.
+  const x = "sensor.apollo_mtr_1_cbbdb4_target_1_x";
+  const y = "sensor.apollo_mtr_1_cbbdb4_target_1_y";
+  const entities: Entities = { [x]: { device_id: "mtr" }, [y]: { device_id: "mtr" } };
+  const states: States = { [x]: state(x, "1200"), [y]: state(y, "800") };
+
+  it("detects a live MTR-1 by its target sensors even without a registry model", () => {
+    const hass = hassWith(states, entities, { mtr: { name: "Apollo MTR-1 cbbdb4" } });
+    const devices = detectRadarDevices(hass);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].ld2450).toBe(true);
+    expect(devices[0].base).toBe("apollo_mtr_1_cbbdb4");
+  });
+
+  it("still skips it once its target sensors go unavailable", () => {
+    const dead: States = { [x]: state(x, "unavailable"), [y]: state(y, "unavailable") };
+    const hass = hassWith(dead, entities, { mtr: MTR_DEVICE });
+    expect(detectRadarDevices(hass)).toHaveLength(0);
+  });
+});

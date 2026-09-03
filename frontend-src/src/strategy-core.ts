@@ -378,24 +378,36 @@ export function buildDeviceSections(
 export function deviceView(
   hass: HomeAssistant,
   dev: RadarDevice,
-  distanceUnit?: string
+  distanceUnit?: string,
+  path: string = dev.base
 ): Record<string, any> {
   return {
     title: dev.name,
-    path: dev.base,
+    path,
     type: "sections",
     sections: buildDeviceSections(hass, dev, distanceUnit),
   };
 }
 
-/** One view (tab) per detected device — the dashboard strategy output. */
+/** One view (tab) per detected device — the dashboard strategy output.
+ *
+ *  View paths must be unique: Home Assistant opens the first view matching the
+ *  URL, so two tabs on one path show the same device and the other looks
+ *  missing. Two radars renamed to the same name in HA (with "rename entity
+ *  ids" ticked) get bases `office` and `office` again, because the `_2` dedup
+ *  tail is stripped with the suffix. The second such tab gets the device id
+ *  appended. */
 export function generateViews(
   hass: HomeAssistant,
   config: StrategyConfig
 ): Record<string, any>[] {
-  return strategyDevices(hass, config).map((d) =>
-    deviceView(hass, d, config.distance_unit)
-  );
+  const used = new Set<string>();
+  return strategyDevices(hass, config).map((d) => {
+    let path = d.base;
+    if (used.has(path)) path = `${d.base}_${d.deviceId}`;
+    used.add(path);
+    return deviceView(hass, d, config.distance_unit, path);
+  });
 }
 
 /** All device sections in a single view — used by the view strategy. */

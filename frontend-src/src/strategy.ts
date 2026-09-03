@@ -10,10 +10,14 @@ import {
 
 /** Stable key for the devices this strategy config would render. Includes
  *  detected capabilities so a forced (explicitly selected) device whose
- *  entities register late still triggers a rebuild. */
+ *  entities register late still triggers a rebuild, and liveness so the
+ *  offline note on a tab tracks the radar. */
 function radarDeviceKey(hass: HomeAssistant, config: StrategyConfig): string {
   return strategyDevices(hass, config)
-    .map((d) => `${d.deviceId}:${d.profile?.key ?? ""}:${d.ld2450 ? 1 : 0}`)
+    .map(
+      (d) =>
+        `${d.deviceId}:${d.profile?.key ?? ""}:${d.ld2450 ? 1 : 0}:${d.online ? 1 : 0}`
+    )
     .sort()
     .join(",");
 }

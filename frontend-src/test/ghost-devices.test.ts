@@ -1,8 +1,9 @@
 /**
- * Ghost/offline device filtering: reflashed or re-added hardware leaves stale
- * device-registry entries behind (Apollo manufacturer/model, registered
- * entities, every state missing or "unavailable"). Those must not get
- * dashboard tabs; devices with live radar entities must.
+ * Offline and ghost devices. A registry-matched Apollo radar gets a tab
+ * whether or not it is online (an unplugged testbench is still the user's
+ * radar); its tab carries an offline note until it reports in. A device with
+ * no registry model has only its entity names to vouch for it, so it needs a
+ * live radar entity to count at all.
  */
 
 import { describe, it, expect } from "vitest";
@@ -53,29 +54,55 @@ function mtrFixture(targetState: string | undefined): {
 }
 
 describe("ghost/offline device filtering", () => {
-  it("skips a registry-matched ghost whose states are all unavailable", () => {
+  it("keeps a registry-matched radar whose states are all unavailable, marked offline", () => {
     const { states, entities } = mtrFixture("unavailable");
     const hass = hassWith(states, entities, { mtr: MTR_DEVICE });
-    expect(detectRadarDevices(hass)).toHaveLength(0);
+    const devices = detectRadarDevices(hass);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].online).toBe(false);
+    expect(devices[0].ld2450).toBe(true);
+    const cards = buildDeviceCards(hass, devices[0]);
+    expect(cards[0].content).toContain("Offline right now");
   });
 
-  it("skips a registry-matched ghost with registered entities but no states", () => {
+  it("keeps a registry-matched radar with registered entities but no states", () => {
     const { states, entities } = mtrFixture(undefined);
     const hass = hassWith(states, entities, { mtr: MTR_DEVICE });
-    expect(detectRadarDevices(hass)).toHaveLength(0);
+    expect(detectRadarDevices(hass)[0].online).toBe(false);
   });
 
-  it("skips a registry-matched device with zero entities (add race)", () => {
+  it("keeps a registry-matched device with zero entities (add race), offline", () => {
     const hass = hassWith({}, {}, { mtr: MTR_DEVICE });
-    expect(detectRadarDevices(hass)).toHaveLength(0);
+    const devices = detectRadarDevices(hass);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].online).toBe(false);
   });
 
-  it("detects a live MTR-1", () => {
+  it("detects a live MTR-1 with no offline note", () => {
     const { states, entities } = mtrFixture("1200");
     const hass = hassWith(states, entities, { mtr: MTR_DEVICE });
     const devices = detectRadarDevices(hass);
     expect(devices).toHaveLength(1);
     expect(devices[0].ld2450).toBe(true);
+    expect(devices[0].online).toBe(true);
+    expect(buildDeviceCards(hass, devices[0])[0].content).not.toContain("Offline");
+  });
+
+  it("skips a device with no registry model until a radar entity is live", () => {
+    // DIY / pre-project firmware: entity names are the only evidence.
+    const x = "sensor.diy_ld2450_target_1_x";
+    const dead = hassWith(
+      { [x]: state(x, "unavailable") },
+      { [x]: { device_id: "diy" } },
+      { diy: { name: "DIY radar" } }
+    );
+    expect(detectRadarDevices(dead)).toHaveLength(0);
+    const live = hassWith(
+      { [x]: state(x, "10") },
+      { [x]: { device_id: "diy" } },
+      { diy: { name: "DIY radar" } }
+    );
+    expect(detectRadarDevices(live)).toHaveLength(1);
   });
 
   it("skips a non-mmWave Apollo device with only generic live entities", () => {
@@ -97,10 +124,10 @@ describe("ghost/offline device filtering", () => {
 
   it("shows an explicitly selected device even while offline (devices config)", () => {
     const { states, entities } = mtrFixture("unavailable");
-    const hass = hassWith(states, entities, { mtr: MTR_DEVICE });
-    // Auto-detection skips it…
+    const hass = hassWith(states, entities, { mtr: { name: "Unknown radar" } });
+    // No registry model and nothing live: auto-detection skips it…
     expect(strategyDevices(hass, {})).toHaveLength(0);
-    // …but an explicit selection forces it, with capabilities from the registry.
+    // …but an explicit selection forces it, capabilities from its entities.
     const devices = strategyDevices(hass, { devices: ["mtr"] });
     expect(devices).toHaveLength(1);
     expect(devices[0].ld2450).toBe(true);
@@ -168,9 +195,11 @@ describe("MTR-1 firmware entity naming", () => {
     expect(devices[0].base).toBe("apollo_mtr_1_cbbdb4");
   });
 
-  it("still skips it once its target sensors go unavailable", () => {
+  it("marks it offline once its target sensors go unavailable", () => {
     const dead: States = { [x]: state(x, "unavailable"), [y]: state(y, "unavailable") };
     const hass = hassWith(dead, entities, { mtr: MTR_DEVICE });
-    expect(detectRadarDevices(hass)).toHaveLength(0);
+    const devices = detectRadarDevices(hass);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].online).toBe(false);
   });
 });

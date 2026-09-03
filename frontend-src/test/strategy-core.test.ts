@@ -38,6 +38,7 @@ const ld2410Dev: RadarDevice = {
   name: "Living Room MSR-2",
   profile: LD2410_PROFILE,
   ld2450: false,
+  online: true,
 };
 
 describe("detectRadarDevices", () => {

@@ -137,13 +137,17 @@ your log for `apollo_mmwave` if a zone you expected is missing.
 
 ## Choosing which devices appear
 
-By default the dashboard auto-detects **online** Apollo mmWave devices — a
-device that is unplugged, or a leftover registry entry from reflashed
-hardware, gets no tab. To control this yourself, open the integration's
-options (Settings → Devices & Services → Apollo mmWave → Configure) and pick
-**Dashboard devices**: the dashboard then shows exactly those devices,
-including ones that are currently offline. Leave the selection empty to go
-back to automatic detection. Changes apply immediately.
+By default the dashboard shows every Apollo mmWave device Home Assistant
+knows about, online or not. An unplugged radar keeps its tab with an
+"offline" note so it is not silently missing; a leftover registry entry from
+reflashed hardware shows the same way until you delete the old device in
+Settings → Devices & Services. A device without an Apollo model in the
+registry (DIY builds) is only picked up while one of its radar entities is
+live. To control the list yourself, open the integration's options (Settings
+→ Devices & Services → Apollo mmWave → Configure) and pick **Dashboard
+devices**: the dashboard then shows exactly those devices and hides the rest.
+Leave the selection empty to go back to automatic detection. Changes apply
+immediately.
 
 The same knob exists for hand-written strategies as a `devices` list:
 

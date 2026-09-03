@@ -1608,7 +1608,8 @@ function deviceFromId(hass, deviceId, forced = false) {
   const reg = apolloModelInfo(d2);
   const base = baseNameFromDevice(hass, deviceId);
   if (!forced && !reg && !base) return void 0;
-  if (!forced && !hasLiveRadarEvidence(hass, deviceId, !!reg)) return void 0;
+  const online = hasLiveRadarEvidence(hass, deviceId, !!reg);
+  if (!forced && !reg && !online) return void 0;
   const profile = detectProfileFromEntities(hass, deviceId) ?? (reg == null ? void 0 : reg.profile);
   const ld2450 = hasLd2450Device(hass, deviceId) || (base ? hasLd2450(hass, base) : false) || ((reg == null ? void 0 : reg.ld2450) ?? false);
   if (!forced && !profile && !ld2450) return void 0;
@@ -1619,7 +1620,8 @@ function deviceFromId(hass, deviceId, forced = false) {
     base: base ?? deviceId,
     name: (d2 == null ? void 0 : d2.name_by_user) || (d2 == null ? void 0 : d2.name) || base || deviceId,
     profile,
-    ld2450
+    ld2450,
+    online
   };
 }
 function detectRadarDevices(hass) {
@@ -1650,7 +1652,15 @@ function entitiesCard(title, rows) {
     entities: rows.map((r2) => ({ entity: r2.entity, name: r2.name }))
   };
 }
+const OFFLINE_NOTE = "\n\n**Offline right now.** Its entities are unavailable, so the cards below will fill in once it reconnects. If this radar was replaced or reflashed under a new name, delete the old device in Home Assistant to drop this tab.";
 function helpCard(dev) {
+  const card = helpCardBody(dev);
+  if (!dev.online && (dev.profile || dev.ld2450)) {
+    card.content = `${card.content}${OFFLINE_NOTE}`;
+  }
+  return card;
+}
+function helpCardBody(dev) {
   if (!dev.profile && !dev.ld2450) {
     return {
       type: "markdown",
@@ -1809,10 +1819,12 @@ function generateCards(hass, config) {
   );
 }
 function radarDeviceKey(hass, config) {
-  return strategyDevices(hass, config).map((d2) => {
-    var _a2;
-    return `${d2.deviceId}:${((_a2 = d2.profile) == null ? void 0 : _a2.key) ?? ""}:${d2.ld2450 ? 1 : 0}`;
-  }).sort().join(",");
+  return strategyDevices(hass, config).map(
+    (d2) => {
+      var _a2;
+      return `${d2.deviceId}:${((_a2 = d2.profile) == null ? void 0 : _a2.key) ?? ""}:${d2.ld2450 ? 1 : 0}:${d2.online ? 1 : 0}`;
+    }
+  ).sort().join(",");
 }
 function shouldRegenerate(config, oldHass, newHass) {
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {

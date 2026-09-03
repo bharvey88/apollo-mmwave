@@ -28,13 +28,17 @@ export interface RadarDevice {
   profile?: RadarProfile;
   /** Whether the device exposes an LD2450 tracking radar (X/Y zones). */
   ld2450: boolean;
+  /** Whether any recognised radar entity currently has a real state. An
+   *  offline radar keeps its tab (with a note) so the user can see it is
+   *  expected and not silently missing. */
+  online: boolean;
 }
 
 export interface StrategyConfig {
   device_id?: string;
   /** Explicit selection: show exactly these devices, online or not. Set by
    *  the integration's "Dashboard devices" option (or by hand in YAML).
-   *  Empty/absent means automatic detection of live devices. */
+   *  Empty/absent means every detected Apollo radar, online or not. */
   devices?: string[];
   distance_unit?: string;
 }
@@ -46,15 +50,16 @@ function isLive(hass: HomeAssistant, entityId: string | undefined): boolean {
 }
 
 /**
- * A device earns a tab only with LIVE radar evidence.
+ * Whether a device shows LIVE radar evidence.
  *
- * The device registry keeps entries for hardware that was reflashed or
- * re-added under a new name; those ghosts still carry an Apollo
- * manufacturer/model and stale registered entities (every state missing or
- * "unavailable" forever), so registry + registered-entity checks alone put
- * dead devices on the dashboard. Require at least one recognized radar entity
- * with a real state — or, for a registry-matched device whose entities were
- * renamed beyond recognition, any live entity at all.
+ * A registry-matched Apollo radar gets a tab either way (an unplugged
+ * testbench is still the user's radar, and a tab saying "offline" beats one
+ * that is silently missing); this decides the note on that tab. A device
+ * WITHOUT a registry model has nothing but its entity names to vouch for it,
+ * so it needs at least one recognized radar entity with a real state. The
+ * device registry keeps entries for hardware that was reflashed or re-added
+ * under a new name; such a ghost now shows as an offline tab until the user
+ * deletes the stale device, which is the right cleanup anyway.
  */
 function hasLiveRadarEvidence(
   hass: HomeAssistant,
@@ -107,10 +112,13 @@ function deviceFromId(
   const base = baseNameFromDevice(hass, deviceId);
   if (!forced && !reg && !base) return undefined;
 
-  // Ghost/offline filter — also covers the freshly-added-device race (its
-  // entities/states aren't in yet): the later entities-registry update still
-  // counts as a device-set change and triggers a regeneration.
-  if (!forced && !hasLiveRadarEvidence(hass, deviceId, !!reg)) return undefined;
+  // Liveness. A registry-matched radar is shown regardless (offline note on
+  // its tab); anything else needs live radar evidence to count as a radar at
+  // all. The freshly-added-device race (registry entry before its entities)
+  // is covered either way: the later entities update changes the device key
+  // and triggers a regeneration.
+  const online = hasLiveRadarEvidence(hass, deviceId, !!reg);
+  if (!forced && !reg && !online) return undefined;
 
   // Entities win over the registry model when they give a concrete chip match
   // (DIY/reflashed hardware); the registry decides when probing is blind
@@ -132,10 +140,12 @@ function deviceFromId(
     name: d?.name_by_user || d?.name || base || deviceId,
     profile,
     ld2450,
+    online,
   };
 }
 
-/** Every Apollo mmWave device — a gate radar (LD2410/LD2412), an LD2450, or both. */
+/** Every Apollo mmWave device — a gate radar (LD2410/LD2412), an LD2450, or
+ *  both. Registry-matched Apollo radars are included online or not. */
 export function detectRadarDevices(hass: HomeAssistant): RadarDevice[] {
   const out: RadarDevice[] = [];
   for (const deviceId of Object.keys(hass.devices)) {
@@ -146,7 +156,7 @@ export function detectRadarDevices(hass: HomeAssistant): RadarDevice[] {
 }
 
 /** The devices a strategy config renders: one explicit device, the explicit
- *  selection list (forced, shown even offline), or auto-detected live ones. */
+ *  selection list (forced, shown even offline), or every detected one. */
 export function strategyDevices(
   hass: HomeAssistant,
   config: StrategyConfig
@@ -173,7 +183,21 @@ function entitiesCard(title: string, rows: Row[]): Record<string, any> | undefin
   };
 }
 
+const OFFLINE_NOTE =
+  "\n\n**Offline right now.** Its entities are unavailable, so the cards" +
+  " below will fill in once it reconnects. If this radar was replaced or" +
+  " reflashed under a new name, delete the old device in Home Assistant to" +
+  " drop this tab.";
+
 function helpCard(dev: RadarDevice): Record<string, any> {
+  const card = helpCardBody(dev);
+  if (!dev.online && (dev.profile || dev.ld2450)) {
+    card.content = `${card.content}${OFFLINE_NOTE}`;
+  }
+  return card;
+}
+
+function helpCardBody(dev: RadarDevice): Record<string, any> {
   if (!dev.profile && !dev.ld2450) {
     // Forced (explicitly selected) device with nothing detectable — offline
     // and no registry model to go by.

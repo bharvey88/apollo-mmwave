@@ -101,10 +101,15 @@ class ApolloMmwaveOptionsFlow(config_entries.OptionsFlow):
                         # models, not every ApolloAutomation device (AIR-1,
                         # TEMP-1, …). Model strings come from the ESPHome
                         # project name (`ApolloAutomation.<MODEL>`); extend
-                        # when new mmWave hardware ships.
+                        # when new mmWave hardware ships. Pinned to the
+                        # esphome integration: a network integration (UniFi,
+                        # say) that tracks the same hardware by MAC otherwise
+                        # gets the radar listed under its own name too.
                         filter=[
                             selector.DeviceFilterSelectorConfig(
-                                manufacturer="ApolloAutomation", model=model
+                                integration="esphome",
+                                manufacturer="ApolloAutomation",
+                                model=model,
                             )
                             for model in (
                                 "MSR-1",

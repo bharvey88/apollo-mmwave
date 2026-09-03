@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_AUTO_CREATE_VIEW,
     DOMAIN,
     EVENT_ZONE_UPDATED,
+    INPUT_UNIT_FACTORS,
     POLYGON_MAX_POINTS,
     POLYGON_MIN_POINTS,
     SERVICE_UPDATE_ZONE,
@@ -51,6 +52,7 @@ from .const import (
     SHAPE_RECT,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
+    STORE_INPUT_UNITS,
     STORE_LABEL,
     STORE_ZONES,
     SUPPORTED_SHAPES,
@@ -386,6 +388,17 @@ def _resolve_target_device(
     return None
 
 
+def _apply_device_settings(
+    device: dict[str, Any], call: ServiceCall, rotation: int | None
+) -> None:
+    """Write the device-wide rotation and target unit, when the call sets them."""
+    if rotation is not None:
+        device[ATTR_ROTATION_DEG] = rotation
+    input_units = call.data.get("input_units")
+    if input_units is not None:
+        device[STORE_INPUT_UNITS] = input_units
+
+
 def _apply_entity_pairs(device: dict[str, Any], call: ServiceCall) -> None:
     """Write the tracked pair list, but only when the call really asks for it."""
     # `clear_entities` wins over `entities` when a call carries both: it is the
@@ -418,6 +431,7 @@ def _call_changes_something(
         )
     if (
         rotation is not None
+        or call.data.get("input_units") is not None
         or call.data.get("clear_entities")
         or _normalize_entities(call.data.get("entities")) is not None
         or zone_id is not None
@@ -454,9 +468,7 @@ def _build_update_zone_handler(
 
         device = store.device(device_id)
 
-        if rotation is not None:
-            device[ATTR_ROTATION_DEG] = rotation
-
+        _apply_device_settings(device, call, rotation)
         _apply_entity_pairs(device, call)
 
         if delete_zone and zone_id is not None:
@@ -520,6 +532,7 @@ UPDATE_ZONE_SERVICE_SCHEMA = vol.All(
             vol.Optional("shape"): vol.In(list(SUPPORTED_SHAPES)),
             vol.Optional("data"): vol.Any(None, dict),
             vol.Optional(ATTR_ROTATION_DEG): vol.Coerce(float),
+            vol.Optional("input_units"): vol.In(list(INPUT_UNIT_FACTORS)),
             vol.Optional("name"): cv.string,
             vol.Optional("delete"): cv.boolean,
             vol.Optional("entities"): vol.All(

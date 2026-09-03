@@ -480,7 +480,18 @@ describe("zone map card writes", () => {
       zone_id: 1,
       shape: "rect",
       data: { x_min: 0, x_max: 1, y_min: 0, y_max: 1 },
+      input_units: "mm",
     });
+  });
+
+  it("tells the backend which unit it draws in, so presence sensors scale the same way", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass, { input_units: "cm" });
+    hass.callService.mockClear();
+
+    card.updateHomeAssistantShape(1, "rect", { x_min: 0, x_max: 1, y_min: 0, y_max: 1 });
+
+    expect(hass.callService.mock.calls[0][2].input_units).toBe("cm");
   });
 
   it("says a zone was saved only once the store took it", async () => {
@@ -508,6 +519,7 @@ describe("zone map card writes", () => {
     expect(hass.callService).toHaveBeenCalledWith("apollo_mmwave", "update_zone", {
       device_id: "dev123",
       rotation_deg: 45,
+      input_units: "mm",
     });
   });
 

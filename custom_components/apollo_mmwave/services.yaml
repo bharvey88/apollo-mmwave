@@ -54,6 +54,19 @@ update_zone:
       required: false
       selector:
         boolean: {}
+    input_units:
+      name: Target Sensor Units
+      description: "Unit the radar's X/Y target sensors report in. Zone geometry is always millimetres; presence detection scales readings by this before testing them. Device-wide. Apollo firmware reports millimetres, so leave this unset unless you are on DIY hardware."
+      required: false
+      selector:
+        select:
+          options:
+            - mm
+            - cm
+            - m
+            - in
+            - ft
+            - yd
     rotation_deg:
       name: Rotation Angle (deg)
       description: Optional device rotation angle (-180..180). Device-wide; if provided without zone fields, only the angle is updated for the device.

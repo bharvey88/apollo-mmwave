@@ -39,6 +39,8 @@ export interface ZoneConfig {
   entities: TargetPair[] | null;
   rotation_deg: number | null;
   label: string | null;
+  /** Unit the presence sensors scale target readings by; null means mm. */
+  input_units?: string | null;
   /** What the radar detected, offered regardless of what the user picked. */
   suggested_entities: TargetPair[];
 }

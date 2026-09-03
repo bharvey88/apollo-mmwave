@@ -29,6 +29,7 @@ from .const import (
     DOMAIN,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
+    STORE_INPUT_UNITS,
     STORE_LABEL,
     STORE_ZONES,
 )
@@ -97,6 +98,8 @@ def _payload(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
         STORE_ENTITIES: entry.get(STORE_ENTITIES),
         ATTR_ROTATION_DEG: entry.get(ATTR_ROTATION_DEG),
         STORE_LABEL: entry.get(STORE_LABEL),
+        # What the presence sensor scales target readings by; null means mm.
+        STORE_INPUT_UNITS: entry.get(STORE_INPUT_UNITS),
         # Raw detection, not `effective_target_pairs`: this field is what the
         # radar offers, which stays meaningful next to whatever the user picked.
         KEY_SUGGESTED_ENTITIES: resolve_target_pairs(hass, device_id),

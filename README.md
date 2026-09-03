@@ -112,7 +112,9 @@ first.
 **The card follows your Home Assistant theme.** Switching Home Assistant
 between light and dark switches the card with it. `dark_mode` in the card
 config is an override now rather than the only way to get a dark card, so
-remove it if you want the card to track your theme.
+remove it if you want the card to track your theme. The card editor has an
+"Appearance" dropdown (follow theme / light / dark) that sets or clears this
+key for you, next to the radar dropdown and the title.
 
 ### Known limitations
 

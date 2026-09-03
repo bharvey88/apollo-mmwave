@@ -523,3 +523,57 @@ describe("zone map card writes", () => {
     expect(payload).not.toHaveProperty("location");
   });
 });
+
+describe("zone map card connection ownership", () => {
+  it("drops a late payload from the radar the card no longer shows", async () => {
+    // Retargeting disposes the old connection only after its own round trips
+    // finish, so its initial read can land after the new radar's did.
+    const hass = fakeHass();
+    let releaseFirstRead!: (payload: any) => void;
+    let reads = 0;
+    hass.callWS = vi.fn(async (msg: any) => {
+      if (msg.type !== ZONES_GET) return [];
+      reads += 1;
+      if (reads === 1) {
+        return new Promise((resolve) => {
+          releaseFirstRead = resolve;
+        });
+      }
+      return { ...ZONE_PAYLOAD, label: "Second radar", zones: {} };
+    });
+
+    const card: any = new ZoneMapCard();
+    card.setConfig({ device_id: "devA" } as any);
+    card.hass = hass;
+    await vi.waitFor(() => expect(reads).toBe(1));
+
+    card.setConfig({ device_id: "devB" } as any);
+    await vi.waitFor(() => expect(card._zoneConfigPayload?.label).toBe("Second radar"));
+
+    releaseFirstRead({
+      ...ZONE_PAYLOAD,
+      label: "First radar",
+      zones: { "1": { shape: "rect", data: { x_min: 0, x_max: 10, y_min: 0, y_max: 10 } } },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(card._zoneConfigPayload.label).toBe("Second radar");
+    expect(card.zones).toHaveLength(0);
+  });
+
+  it("restores the keyboard and outside-click listeners when re-attached", async () => {
+    const hass = fakeHass();
+    const card = await mountCard(hass);
+    document.body.appendChild(card);
+    expect(card._onKeyDown).toBeTruthy();
+
+    card.remove();
+    expect(card._onKeyDown).toBeNull();
+
+    document.body.appendChild(card);
+    expect(card._onKeyDown).toBeTruthy();
+    expect(card._outsideClickHandler).toBeTruthy();
+    card.remove();
+  });
+});

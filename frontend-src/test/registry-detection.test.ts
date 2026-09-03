@@ -105,12 +105,15 @@ describe("registry-first detectRadarDevices", () => {
     expect(detectRadarDevices(hass)[0].profile?.key).toBe("ld2410");
   });
 
-  it("skips a registry device whose entities haven't registered yet", () => {
-    // Device-add race: the registry event lands before the entities. Skipping
-    // keeps the later entities update looking like a device-set change, so the
-    // strategy still regenerates.
+  it("lists a registry device whose entities haven't registered yet as offline", () => {
+    // Device-add race: the registry event lands before the entities. The tab
+    // appears at once (offline note); the later entities update flips the
+    // device key, so the strategy still regenerates with the real cards.
     const hass = hassWith([], apollo("MSR-2"));
-    expect(detectRadarDevices(hass)).toHaveLength(0);
+    const devices = detectRadarDevices(hass);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].online).toBe(false);
+    expect(devices[0].profile?.key).toBe("ld2410");
   });
 
   it("falls back to entity-suffix detection when manufacturer is missing (DIY)", () => {

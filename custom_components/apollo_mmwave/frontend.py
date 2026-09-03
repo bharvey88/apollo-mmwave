@@ -299,9 +299,22 @@ def _is_ours(stored: dict[str, Any] | None) -> bool:
     )
 
 
-def _desired_config(devices: list[str] | None) -> dict[str, Any]:
-    """Build the strategy config for the given device selection."""
-    strategy: dict[str, Any] = {"type": DASHBOARD_STRATEGY_TYPE}
+def _desired_config(
+    devices: list[str] | None, stored: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """
+    Build the strategy config for the given device selection.
+
+    Only ``type`` and ``devices`` are ours. Anything else under ``strategy``
+    (``distance_unit`` is a documented option) was typed into the raw config
+    editor by the user, and rewriting the whole dict on every restart threw it
+    away, so it is carried over.
+    """
+    strategy: dict[str, Any] = {}
+    if _is_ours(stored):
+        strategy.update(stored["strategy"])  # type: ignore[index]
+    strategy["type"] = DASHBOARD_STRATEGY_TYPE
+    strategy.pop("devices", None)
     if devices:
         # Explicit selection: the strategy shows exactly these devices, online
         # or not, instead of auto-detecting live ones.
@@ -374,7 +387,7 @@ async def async_register_dashboard(
             )
             return True
 
-        desired = _desired_config(devices)
+        desired = _desired_config(devices, stored)
         if stored == desired:
             _LOGGER.debug("Apollo mmWave: dashboard already registered.")
             return True

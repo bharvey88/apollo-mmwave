@@ -709,29 +709,33 @@ const KNOWN_SUFFIXES = [
   // LD2450 tracking radar — every entity is `{base}_ld2450_...`. Needed so
   // zone-only devices (e.g. MTR-1, no gate radar) still resolve to a base name.
   /_ld2450_.+$/,
+  // MTR-1 firmware names its target sensors "Target-1 X" with no chip prefix.
+  /_target_\d+_[xy](?:_\d+)?$/,
   // LD2410 (MSR) — varied prefixes.
-  /_radar_engineering_mode$/,
-  /_ld2410_bluetooth$/,
-  /_restart_radar$/,
-  /_factory_reset_radar$/,
-  /_esp_reboot$/,
-  /_radar_timeout$/,
-  /_radar_zone_\d+_start$/,
-  /_radar_end_zone_\d+$/,
-  /_radar_max_move_distance$/,
-  /_radar_max_still_distance$/,
-  /_ld2410_gate_size$/,
-  /_g\d+_move_threshold$/,
-  /_g\d+_still_threshold$/,
-  /_g\d+_move_energy$/,
-  /_g\d+_still_energy$/,
-  /_radar_still_distance$/,
-  /_radar_moving_distance$/,
-  /_radar_detection_distance$/,
-  /_radar_moving_target$/,
-  /_radar_still_target$/,
-  /_radar_target$/,
-  /_radar_zone_\d+_occupancy$/
+  /_radar_engineering_mode(?:_\d+)?$/,
+  /_ld2410_bluetooth(?:_\d+)?$/,
+  /_radar_control_bluetooth(?:_\d+)?$/,
+  /_radar_distance_resolution(?:_\d+)?$/,
+  /_restart_radar(?:_\d+)?$/,
+  /_factory_reset_radar(?:_\d+)?$/,
+  /_esp_reboot(?:_\d+)?$/,
+  /_radar_timeout(?:_\d+)?$/,
+  /_radar_zone_\d+_start(?:_\d+)?$/,
+  /_radar_end_zone_\d+(?:_\d+)?$/,
+  /_radar_max_move_distance(?:_\d+)?$/,
+  /_radar_max_still_distance(?:_\d+)?$/,
+  /_ld2410_gate_size(?:_\d+)?$/,
+  /_g\d+_move_threshold(?:_\d+)?$/,
+  /_g\d+_still_threshold(?:_\d+)?$/,
+  /_g\d+_move_energy(?:_\d+)?$/,
+  /_g\d+_still_energy(?:_\d+)?$/,
+  /_radar_still_distance(?:_\d+)?$/,
+  /_radar_moving_distance(?:_\d+)?$/,
+  /_radar_detection_distance(?:_\d+)?$/,
+  /_radar_moving_target(?:_\d+)?$/,
+  /_radar_still_target(?:_\d+)?$/,
+  /_radar_target(?:_\d+)?$/,
+  /_radar_zone_\d+_occupancy(?:_\d+)?$/
 ];
 function baseFromObjectId(objectId) {
   for (const re of KNOWN_SUFFIXES) {
@@ -766,6 +770,9 @@ const SCALAR_PATTERNS = [
   // LD2410 (MSR) naming.
   S2("engineering_mode", "switch", "_radar_engineering_mode"),
   S2("bluetooth", "switch", "_ld2410_bluetooth"),
+  // MSR-1 firmware spells these two differently from the MSR-2.
+  S2("bluetooth", "switch", "_radar_control_bluetooth"),
+  S2("gate_size", "select", "_radar_distance_resolution"),
   S2("restart_radar", "button", "_restart_radar"),
   S2("factory_reset_radar", "button", "_factory_reset_radar"),
   S2("esp_reboot", "button", "_esp_reboot"),
@@ -1469,8 +1476,8 @@ function ld2450TargetPairs(base) {
     y: `sensor.${base}_ld2450_target_${n3}_y`
   }));
 }
-const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
-const TARGET_Y = /_ld2450_target_(\d+)_y(?:_\d+)?$/;
+const TARGET_X = /(?:_ld2450)?_target_(\d+)_x(?:_\d+)?$/;
+const TARGET_Y = /(?:_ld2450)?_target_(\d+)_y(?:_\d+)?$/;
 function ld2450EntityIds(hass, deviceId) {
   const ids = [];
   for (const [id, e2] of Object.entries(hass.entities)) {
@@ -1488,7 +1495,7 @@ function hasLd2450Device(hass, deviceId) {
   return false;
 }
 function hasLd2450(hass, base) {
-  return ld2450TargetPairs(base).some((p2) => p2.x in hass.states);
+  return ld2450TargetPairs(base).some((p2) => p2.x in hass.states) || [1, 2, 3].some((n3) => `sensor.${base}_target_${n3}_x` in hass.states);
 }
 function zoneMapCard(deviceId, title) {
   return {
@@ -1601,7 +1608,8 @@ function deviceFromId(hass, deviceId, forced = false) {
   const reg = apolloModelInfo(d2);
   const base = baseNameFromDevice(hass, deviceId);
   if (!forced && !reg && !base) return void 0;
-  if (!forced && !hasLiveRadarEvidence(hass, deviceId, !!reg)) return void 0;
+  const online = hasLiveRadarEvidence(hass, deviceId, !!reg);
+  if (!forced && !reg && !online) return void 0;
   const profile = detectProfileFromEntities(hass, deviceId) ?? (reg == null ? void 0 : reg.profile);
   const ld2450 = hasLd2450Device(hass, deviceId) || (base ? hasLd2450(hass, base) : false) || ((reg == null ? void 0 : reg.ld2450) ?? false);
   if (!forced && !profile && !ld2450) return void 0;
@@ -1612,7 +1620,8 @@ function deviceFromId(hass, deviceId, forced = false) {
     base: base ?? deviceId,
     name: (d2 == null ? void 0 : d2.name_by_user) || (d2 == null ? void 0 : d2.name) || base || deviceId,
     profile,
-    ld2450
+    ld2450,
+    online
   };
 }
 function detectRadarDevices(hass) {
@@ -1643,7 +1652,15 @@ function entitiesCard(title, rows) {
     entities: rows.map((r2) => ({ entity: r2.entity, name: r2.name }))
   };
 }
+const OFFLINE_NOTE = "\n\n**Offline right now.** Its entities are unavailable, so the cards below will fill in once it reconnects. If this radar was replaced or reflashed under a new name, delete the old device in Home Assistant to drop this tab.";
 function helpCard(dev) {
+  const card = helpCardBody(dev);
+  if (!dev.online && (dev.profile || dev.ld2450)) {
+    card.content = `${card.content}${OFFLINE_NOTE}`;
+  }
+  return card;
+}
+function helpCardBody(dev) {
   if (!dev.profile && !dev.ld2450) {
     return {
       type: "markdown",
@@ -1774,18 +1791,22 @@ function buildDeviceSections(hass, dev, distanceUnit) {
   }
   return columns.map((col) => col.filter(Boolean)).filter((col) => col.length > 0).map((cards) => ({ type: "grid", cards }));
 }
-function deviceView(hass, dev, distanceUnit) {
+function deviceView(hass, dev, distanceUnit, path = dev.base) {
   return {
     title: dev.name,
-    path: dev.base,
+    path,
     type: "sections",
     sections: buildDeviceSections(hass, dev, distanceUnit)
   };
 }
 function generateViews(hass, config) {
-  return strategyDevices(hass, config).map(
-    (d2) => deviceView(hass, d2, config.distance_unit)
-  );
+  const used = /* @__PURE__ */ new Set();
+  return strategyDevices(hass, config).map((d2) => {
+    let path = d2.base;
+    if (used.has(path)) path = `${d2.base}_${d2.deviceId}`;
+    used.add(path);
+    return deviceView(hass, d2, config.distance_unit, path);
+  });
 }
 function generateSections(hass, config) {
   return strategyDevices(hass, config).flatMap(
@@ -1798,17 +1819,31 @@ function generateCards(hass, config) {
   );
 }
 function radarDeviceKey(hass, config) {
-  return strategyDevices(hass, config).map((d2) => {
-    var _a2;
-    return `${d2.deviceId}:${((_a2 = d2.profile) == null ? void 0 : _a2.key) ?? ""}:${d2.ld2450 ? 1 : 0}`;
-  }).sort().join(",");
+  return strategyDevices(hass, config).map(
+    (d2) => {
+      var _a2;
+      return `${d2.deviceId}:${((_a2 = d2.profile) == null ? void 0 : _a2.key) ?? ""}:${d2.ld2450 ? 1 : 0}:${d2.online ? 1 : 0}`;
+    }
+  ).sort().join(",");
 }
 function shouldRegenerate(config, oldHass, newHass) {
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
-    return false;
+    if (!availabilityChanged(oldHass, newHass)) return false;
   }
   const cfg = config ?? {};
   return radarDeviceKey(oldHass, cfg) !== radarDeviceKey(newHass, cfg);
+}
+function isUnavailable(state) {
+  return state === void 0 || state.state === "unavailable";
+}
+function availabilityChanged(oldHass, newHass) {
+  for (const id in newHass.states) {
+    const next = newHass.states[id];
+    const prev = oldHass.states[id];
+    if (prev === next) continue;
+    if (isUnavailable(prev) !== isUnavailable(next)) return true;
+  }
+  return false;
 }
 const EMPTY_VIEW = {
   title: "Apollo Radar Tuning",
@@ -1865,7 +1900,7 @@ if (!window.customStrategies.some(
     documentationURL: "https://github.com/bharvey88/apollo-mmwave"
   });
 }
-const CARD_VERSION = "2.0.0";
+const CARD_VERSION = "2.1.0";
 console.info(
   `%c APOLLO-MMWAVE %c v${CARD_VERSION} `,
   "color:#fff;background:#03a9f4;font-weight:700;",

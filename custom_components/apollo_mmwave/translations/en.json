@@ -26,7 +26,7 @@
                 },
                 "data_description": {
                     "auto_create_view": "Registers an 'Apollo mmWave' dashboard in your sidebar with a tab per device. Takes effect immediately. Turn this off if you prefer to lay out the cards yourself; the cards and strategy are still available to add manually.",
-                    "dashboard_devices": "Leave empty to detect Apollo mmWave devices automatically (online devices only). Select devices to show exactly those on the dashboard — including ones that are currently offline or unplugged."
+                    "dashboard_devices": "Leave empty to show every Apollo mmWave device automatically; offline ones get a tab with an offline note. Select devices to show exactly those and hide the rest."
                 }
             }
         }

@@ -10,10 +10,14 @@ import {
 
 /** Stable key for the devices this strategy config would render. Includes
  *  detected capabilities so a forced (explicitly selected) device whose
- *  entities register late still triggers a rebuild. */
+ *  entities register late still triggers a rebuild, and liveness so the
+ *  offline note on a tab tracks the radar. */
 function radarDeviceKey(hass: HomeAssistant, config: StrategyConfig): string {
   return strategyDevices(hass, config)
-    .map((d) => `${d.deviceId}:${d.profile?.key ?? ""}:${d.ld2450 ? 1 : 0}`)
+    .map(
+      (d) =>
+        `${d.deviceId}:${d.profile?.key ?? ""}:${d.ld2450 ? 1 : 0}:${d.online ? 1 : 0}`
+    )
     .sort()
     .join(",");
 }
@@ -41,11 +45,35 @@ export function shouldRegenerate(
 ): boolean {
   // Fast path: registry objects are replaced (not mutated) on registry
   // changes, so routine state churn (moving targets) short-circuits here.
+  //
+  // With one exception. A tab needs LIVE radar evidence, and liveness lives in
+  // `hass.states`, which the registries never reflect. A dashboard opened
+  // while the radars were still reconnecting after a Home Assistant restart
+  // saw every one of them `unavailable`, drew none, and then never looked
+  // again: the devices coming online touched states only. So an entity
+  // crossing the available/unavailable line falls through to the full key.
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
-    return false;
+    if (!availabilityChanged(oldHass, newHass)) return false;
   }
   const cfg = config ?? {};
   return radarDeviceKey(oldHass, cfg) !== radarDeviceKey(newHass, cfg);
+}
+
+function isUnavailable(state: HomeAssistant["states"][string] | undefined): boolean {
+  return state === undefined || state.state === "unavailable";
+}
+
+/** True when any entity became available or unavailable between two hass
+ *  objects. Home Assistant replaces the state object of exactly the entities
+ *  that changed, so unchanged ones are skipped on reference equality. */
+function availabilityChanged(oldHass: HomeAssistant, newHass: HomeAssistant): boolean {
+  for (const id in newHass.states) {
+    const next = newHass.states[id];
+    const prev = oldHass.states[id];
+    if (prev === next) continue;
+    if (isUnavailable(prev) !== isUnavailable(next)) return true;
+  }
+  return false;
 }
 
 const EMPTY_VIEW = {

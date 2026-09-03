@@ -113,11 +113,15 @@ export async function subscribeEntryLoads(
         const list = Array.isArray(changes) ? changes : [changes];
         // "added" and "updated" both carry the loaded state, and an options
         // change reports loaded too. Re-subscribing on one of those is a wasted
-        // round trip, which is cheaper than missing a reload.
+        // round trip, which is cheaper than missing a reload. The feed's first
+        // message is a dump of every existing entry with `type: null`; that is
+        // not a reload, and reacting to it opened every card twice.
         if (
           list.some(
             (change) =>
-              change?.entry?.domain === DOMAIN && change?.entry?.state === "loaded"
+              (change?.type === "updated" || change?.type === "added") &&
+              change?.entry?.domain === DOMAIN &&
+              change?.entry?.state === "loaded"
           )
         ) {
           callback();
@@ -203,11 +207,22 @@ export async function connectZones(
     // the older of the two and gets dropped.
     let pushed = false;
     try {
-      unsubscribeZones = await subscribeZones(hass, deviceId, (config) => {
+      const unsubscribe = await subscribeZones(hass, deviceId, (config) => {
         if (disposed) return;
         pushed = true;
         handlers.onConfig(config);
       });
+      if (disposed) {
+        // Disposed while the subscribe was in flight: the teardown already ran
+        // and found nothing to close, so this one is ours to close.
+        try {
+          await unsubscribe();
+        } catch {
+          // Nothing left server side.
+        }
+        return;
+      }
+      unsubscribeZones = unsubscribe;
       const config = await fetchZones(hass, deviceId);
       retryIndex = 0;
       if (disposed || pushed) return;
@@ -223,21 +238,31 @@ export async function connectZones(
     }
   };
 
+  // One open at a time. Two overlapping opens (a reload's burst of entry
+  // updates, or an update landing on top of a retry) both found nothing to
+  // close, both subscribed, and the second handle overwrote the first, so the
+  // orphan stayed open server side and every payload arrived twice.
+  let queue: Promise<void> = Promise.resolve();
+  const requestOpen = (): Promise<void> => {
+    queue = queue.then(open);
+    return queue;
+  };
+
   const scheduleRetry = () => {
     if (disposed || retryIndex >= RETRY_DELAYS_MS.length) return;
     const delay = RETRY_DELAYS_MS[retryIndex];
     retryIndex += 1;
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      void open();
+      void requestOpen();
     }, delay);
   };
 
-  await open();
+  await requestOpen();
 
   const unsubscribeEntries = await subscribeEntryLoads(hass, () => {
     if (disposed) return;
-    void open();
+    void requestOpen();
   });
 
   return async () => {

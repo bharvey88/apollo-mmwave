@@ -3,8 +3,9 @@ LD2450 tracking-radar target sensors for a device.
 
 The LD2450 in R_PRO-1 and MTR-1 reports moving-target positions as one X and
 one Y sensor per target, named ``sensor.<base>_ld2450_target_<n>_x`` / ``_y``
-by the firmware. Resolving those from the entity registry is what lets the
-card stop asking the user to hand-pick them.
+by the R_PRO-1 firmware and ``sensor.<base>_target_<n>_x`` / ``_y`` by the
+MTR-1 firmware. Resolving those from the entity registry is what lets the card
+stop asking the user to hand-pick them.
 
 Matching is on the entity id suffix rather than the whole id, so a renamed
 prefix does not break detection, and the optional trailing ``_2`` absorbs Home
@@ -44,8 +45,11 @@ if TYPE_CHECKING:
 
     from .store import ZoneStore
 
-TARGET_X = re.compile(r"_ld2450_target_(\d+)_x(?:_\d+)?$")
-TARGET_Y = re.compile(r"_ld2450_target_(\d+)_y(?:_\d+)?$")
+# The R_PRO-1 firmware names its targets "LD2450 Target-1 X"; the MTR-1 firmware
+# names the same sensors "Target-1 X", with no chip prefix. Both end in
+# `_target_<n>_x`, so the prefix is optional rather than assumed.
+TARGET_X = re.compile(r"(?:_ld2450)?_target_(\d+)_x(?:_\d+)?$")
+TARGET_Y = re.compile(r"(?:_ld2450)?_target_(\d+)_y(?:_\d+)?$")
 
 
 def resolve_target_pairs(hass: HomeAssistant, device_id: str) -> list[dict[str, str]]:
@@ -126,19 +130,30 @@ def async_track_target_pairs(hass: HomeAssistant) -> CALLBACK_TYPE:
             ]
         )
 
+    unsub_started: CALLBACK_TYPE | None = None
+
     @callback
     def _started(_event: Event[Any]) -> None:
+        # A one-shot listener removes itself when it fires. Removing it again
+        # from the teardown logs "Unable to remove unknown job listener" at
+        # error level on every reload after boot, so forget it here.
+        nonlocal unsub_started
+        unsub_started = None
         _invalidate(list(cache))
 
     unsub_registry = hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, _registry_updated
     )
-    unsub_started = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
+    if not hass.is_running:
+        unsub_started = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, _started
+        )
 
     @callback
     def _unsubscribe() -> None:
         unsub_registry()
-        unsub_started()
+        if unsub_started is not None:
+            unsub_started()
         hass.data.get(DOMAIN, {}).pop(DATA_PAIR_CACHE, None)
 
     return _unsubscribe

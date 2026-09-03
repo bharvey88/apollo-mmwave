@@ -81,3 +81,55 @@ describe("shouldRegenerate", () => {
     expect(shouldRegenerate({}, oldHass, newHass)).toBe(false);
   });
 });
+
+describe("shouldRegenerate on availability changes", () => {
+  // A dashboard opened while the radars were still reconnecting after a Home
+  // Assistant restart saw them all `unavailable` and drew no tabs. The devices
+  // coming online changed `hass.states` only, so the registry fast path
+  // returned false forever and the tabs never appeared without a page reload.
+  const devices = { dev1: { name: "Living Room MSR-2" } };
+  const entities = { [eng]: { device_id: "dev1" } };
+  const offline = hassWith(
+    { [eng]: { entity_id: eng, state: "unavailable", attributes: {} } },
+    entities,
+    devices
+  );
+  const online = hassWith(
+    { [eng]: { entity_id: eng, state: "off", attributes: {} } },
+    entities,
+    devices
+  );
+
+  it("regenerates when a radar comes online with the registries untouched", () => {
+    expect(shouldRegenerate({}, offline, online)).toBe(true);
+  });
+
+  it("regenerates when a radar goes unavailable, so its tab does not go stale", () => {
+    expect(shouldRegenerate({}, online, offline)).toBe(true);
+  });
+
+  it("still ignores ordinary state churn on a live radar", () => {
+    const moved = hassWith(
+      { [eng]: { entity_id: eng, state: "on", attributes: {} } },
+      entities,
+      devices
+    );
+    expect(shouldRegenerate({}, online, moved)).toBe(false);
+  });
+
+  it("ignores availability flips on entities that belong to no radar", () => {
+    const lamp = "light.hall";
+    const withLampOff = hassWith(
+      { ...online.states, [lamp]: { entity_id: lamp, state: "unavailable", attributes: {} } },
+      { ...entities, [lamp]: { device_id: "lamp" } },
+      { ...devices, lamp: { name: "Hall lamp" } }
+    );
+    const withLampOn = hassWith(
+      { ...withLampOff.states, [lamp]: { entity_id: lamp, state: "on", attributes: {} } },
+      withLampOff.entities,
+      withLampOff.devices
+    );
+    // The full key is recomputed, but the radar set is the same.
+    expect(shouldRegenerate({}, withLampOff, withLampOn)).toBe(false);
+  });
+});

@@ -391,16 +391,28 @@ export class ZoneMapCard extends HTMLElement {
 
   connectedCallback() {
     // Home Assistant detaches and re-attaches cards as views change, and
-    // `disconnectedCallback` closed the subscription on the way out.
+    // `disconnectedCallback` closed the subscription and dropped the window
+    // and document listeners on the way out. The canvas keeps its own
+    // listeners across a detach, so only the global ones come back here.
     this._connectZones();
+    if (this.canvas && !this._onKeyDown) this._attachGlobalListeners();
   }
 
   _connectZones() {
     if (this._zoneConnection || !this._hass || !this.deviceId) return;
-    this._zoneConnection = connectZones(this._hass, this.deviceId, {
-      onConfig: (config) => this._applyZoneConfig(config),
-      onError: (message) => this._setLoadError(message),
+    // Tagged, so a payload from a connection this card has since replaced
+    // (retargeted to another radar, or detached and re-attached) is dropped:
+    // `_disconnectZones` can only dispose the old one after its own round trips
+    // finish, and its initial read can land after the new radar's did.
+    const connection = connectZones(this._hass, this.deviceId, {
+      onConfig: (config) => {
+        if (this._zoneConnection === connection) this._applyZoneConfig(config);
+      },
+      onError: (message) => {
+        if (this._zoneConnection === connection) this._setLoadError(message);
+      },
     });
+    this._zoneConnection = connection;
   }
 
   _disconnectZones() {
@@ -869,6 +881,23 @@ export class ZoneMapCard extends HTMLElement {
       }
     });
 
+    this._attachGlobalListeners();
+
+    const canvasContainer = this.canvas.parentElement;
+    if (canvasContainer) {
+      canvasContainer.addEventListener('mouseleave', () => {
+        if (this.isDrawing) this.cancelDrawing();
+      });
+    }
+  }
+
+  /** The window and document listeners. Separate from the canvas ones because
+   *  `disconnectedCallback` removes exactly these, and a re-attached card has
+   *  to get them back without re-wiring a canvas that never lost its own. */
+  _attachGlobalListeners() {
+    if (!this.canvas) return;
+    this._detachGlobalListeners();
+
     this._onKeyDown = (event) => {
       if (this.drawMode !== DRAW_MODES.POLYGON) return;
       if (event.key === 'Escape') {
@@ -891,12 +920,6 @@ export class ZoneMapCard extends HTMLElement {
     };
     document.addEventListener('mousedown', this._outsideClickHandler, true);
     document.addEventListener('touchstart', this._outsideClickHandler, true);
-
-    if (canvasContainer) {
-      canvasContainer.addEventListener('mouseleave', () => {
-        if (this.isDrawing) this.cancelDrawing();
-      });
-    }
   }
 
   _attachConeControls() {

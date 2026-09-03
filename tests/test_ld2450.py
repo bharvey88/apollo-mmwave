@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers.entity_registry import RegistryEntryDisabler
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.apollo_mmwave.ld2450 import (
+    async_track_target_pairs,
     effective_target_pairs,
     resolve_target_pairs,
 )
@@ -72,6 +74,40 @@ async def test_resolve_target_pairs_skips_unpaired_and_tolerates_dedup_suffix(
 
     assert resolve_target_pairs(hass, device.id) == [
         {"x": "sensor.mtr_ld2450_target_1_x_2", "y": "sensor.mtr_ld2450_target_1_y_2"}
+    ]
+
+
+async def test_resolve_target_pairs_accepts_mtr1_firmware_naming(
+    hass, entity_registry, device_registry
+) -> None:
+    """The MTR-1 firmware names its targets "Target-1 X", with no LD2450 prefix."""
+    device = _make_radar(hass, device_registry, "MTR-1")
+    for suffix in ("target_1_x", "target_1_y", "target_3_x", "target_3_y"):
+        entity_registry.async_get_or_create(
+            "sensor",
+            "esphome",
+            suffix,
+            device_id=device.id,
+            suggested_object_id=f"apollo_mtr_1_cbbdb4_{suffix}",
+        )
+    # Not a coordinate, and must not be mistaken for one.
+    entity_registry.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "presence",
+        device_id=device.id,
+        suggested_object_id="apollo_mtr_1_cbbdb4_radar_target",
+    )
+
+    assert resolve_target_pairs(hass, device.id) == [
+        {
+            "x": "sensor.apollo_mtr_1_cbbdb4_target_1_x",
+            "y": "sensor.apollo_mtr_1_cbbdb4_target_1_y",
+        },
+        {
+            "x": "sensor.apollo_mtr_1_cbbdb4_target_3_x",
+            "y": "sensor.apollo_mtr_1_cbbdb4_target_3_y",
+        },
     ]
 
 
@@ -196,3 +232,24 @@ async def test_effective_target_pairs_does_not_create_a_store_entry(
     # A setdefault read here would leave a permanent entry for a device nobody
     # has configured, which is the phantom-entry bug this release exists to fix.
     assert store.devices == {}
+
+
+async def test_unloading_after_startup_logs_no_listener_error(
+    hass, config_entry, esphome_device, caplog
+) -> None:
+    """The one-shot STARTED listener must not be removed twice on reload."""
+    _ = esphome_device
+
+    unsubscribe = async_track_target_pairs(hass)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    unsubscribe()
+
+    assert "Unable to remove unknown job listener" not in caplog.text
+
+    # And once Home Assistant is already running there is nothing to wait for.
+    _ = config_entry
+    assert hass.is_running
+    unsubscribe = async_track_target_pairs(hass)
+    unsubscribe()
+    assert "Unable to remove unknown job listener" not in caplog.text

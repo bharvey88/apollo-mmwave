@@ -173,3 +173,68 @@ describe("zone map card editor changes", () => {
     expect(configs).toHaveLength(0);
   });
 });
+
+describe("zone map card editor device filter", () => {
+  it("offers a registry-matched Apollo LD2450 model whose entities are not in yet", () => {
+    const editor = mountEditor({ device_id: "" });
+    const hass = fakeHass();
+    hass.devices.fresh = { name: "Apollo MTR-1 aabbcc", manufacturer: "ApolloAutomation", model: "MTR-1" };
+    hass.devices.msr = { name: "Apollo MSR-2 aabbcc", manufacturer: "ApolloAutomation", model: "MSR-2" };
+    editor.hass = hass;
+    expect(picker(editor).deviceFilter({ id: "fresh" })).toBe(true);
+    // An MSR-2 has no LD2450, so it can never draw.
+    expect(picker(editor).deviceFilter({ id: "msr" })).toBe(false);
+  });
+
+  it("offers an MTR-1 named the way its firmware names it", () => {
+    const editor = mountEditor({ device_id: "" });
+    const hass = fakeHass();
+    hass.devices.mtr = { name: "Apollo MTR-1 cbbdb4" };
+    hass.entities["sensor.apollo_mtr_1_cbbdb4_target_1_x"] = { device_id: "mtr" };
+    editor.hass = hass;
+    expect(picker(editor).deviceFilter({ id: "mtr" })).toBe(true);
+  });
+});
+
+describe("zone map card editor appearance", () => {
+  function themeSelect(editor: ZoneMapCardEditor): any {
+    return editor.shadowRoot!.querySelector("ha-selector");
+  }
+
+  it("renders a dropdown reflecting the dark_mode key", () => {
+    expect(themeSelect(mountEditor({ device_id: "radar" })).value).toBe("auto");
+    expect(themeSelect(mountEditor({ device_id: "radar", dark_mode: true })).value).toBe("dark");
+    expect(themeSelect(mountEditor({ device_id: "radar", dark_mode: false })).value).toBe("light");
+    const select = themeSelect(mountEditor({ device_id: "radar" }));
+    expect(select.selector.select.options.map((o: any) => o.value)).toEqual([
+      "auto",
+      "light",
+      "dark",
+    ]);
+  });
+
+  it("writes dark_mode true/false for Dark/Light and drops the key for Auto", () => {
+    const editor = mountEditor({ device_id: "radar", title: "Office" });
+    const configs = emitted(editor);
+    const select = themeSelect(editor);
+
+    select.dispatchEvent(new CustomEvent("value-changed", { detail: { value: "dark" } }));
+    expect(configs[0]).toMatchObject({ device_id: "radar", title: "Office", dark_mode: true });
+
+    select.dispatchEvent(new CustomEvent("value-changed", { detail: { value: "light" } }));
+    expect(configs[1].dark_mode).toBe(false);
+
+    select.dispatchEvent(new CustomEvent("value-changed", { detail: { value: "auto" } }));
+    expect(configs[2]).not.toHaveProperty("dark_mode");
+    expect(configs[2].device_id).toBe("radar");
+  });
+
+  it("says nothing when the dropdown echoes the value it already holds", () => {
+    const editor = mountEditor({ device_id: "radar", dark_mode: true });
+    const configs = emitted(editor);
+    themeSelect(editor).dispatchEvent(
+      new CustomEvent("value-changed", { detail: { value: "dark" } })
+    );
+    expect(configs).toHaveLength(0);
+  });
+});

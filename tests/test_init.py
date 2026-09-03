@@ -382,3 +382,66 @@ async def test_unload_removes_service(hass, init_integration) -> None:
     assert await hass.config_entries.async_unload(init_integration.entry_id)
     await hass.async_block_till_done()
     assert not hass.services.has_service(DOMAIN, SERVICE_UPDATE_ZONE)
+
+
+async def test_call_with_nothing_to_change_mints_no_store_entry(
+    hass, init_integration, device_id, caplog
+) -> None:
+    """A device_id alone must not create a permanent empty store entry."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN, SERVICE_UPDATE_ZONE, {"device_id": device_id}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert device_id not in get_store(hass).devices
+    assert "carried nothing to change" in caplog.text
+
+
+async def test_delete_without_zone_id_changes_nothing(
+    hass, init_integration, device_id, caplog
+) -> None:
+    """`delete: true` with no zone_id is refused instead of reinterpreted."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, "delete": True, "rotation_deg": 45},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert device_id not in get_store(hass).devices
+    assert "without a zone_id" in caplog.text
+
+
+async def test_zone_rename_updates_generated_names_only(
+    hass, init_integration, device_id
+) -> None:
+    """A name the user typed in the entity settings dialog survives a rename."""
+    _ = init_integration
+    await _create_rect_zone(hass, device_id)
+    registry = er.async_get(hass)
+    sensor_eid, presence_eid = _zone_entity_ids(hass, device_id)
+    assert sensor_eid
+    assert presence_eid
+
+    async def rename(name: str) -> None:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_UPDATE_ZONE,
+            {"device_id": device_id, "zone_id": 1, "name": name},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    # Nothing typed yet: both names are ours to write.
+    await rename("Couch")
+    assert registry.async_get(sensor_eid).name == "Zone 1 - Couch"
+    assert registry.async_get(presence_eid).name == "Zone 1 presence - Couch"
+
+    # The user renames the presence entity by hand, then renames the zone.
+    registry.async_update_entity(presence_eid, name="Kitchen door")
+    await rename("Sofa")
+    assert registry.async_get(sensor_eid).name == "Zone 1 - Sofa"
+    assert registry.async_get(presence_eid).name == "Kitchen door"

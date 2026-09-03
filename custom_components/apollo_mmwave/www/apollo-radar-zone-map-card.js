@@ -132,7 +132,7 @@ async function connectZones(hass, deviceId, handlers) {
     }
   };
 }
-const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
+const TARGET_X = /(?:_ld2450)?_target_(\d+)_x(?:_\d+)?$/;
 function hasLd2450Device(hass, deviceId) {
   for (const [id, e] of Object.entries(hass.entities)) {
     if (e.device_id !== deviceId || !id.startsWith("sensor.")) continue;
@@ -140,8 +140,127 @@ function hasLd2450Device(hass, deviceId) {
   }
   return false;
 }
+function emptyZones() {
+  return {
+    zone_1_start: void 0,
+    end_zone_1: void 0,
+    end_zone_2: void 0,
+    end_zone_3: void 0,
+    zone_1_occupancy: void 0,
+    zone_2_occupancy: void 0,
+    zone_3_occupancy: void 0
+  };
+}
+const LD2410_PROFILE = {
+  key: "ld2410",
+  label: "LD2410",
+  maxBarLabels: ["Max Move", "Max Still"],
+  rangeLabels: ["Max Move Gate", "Max Still Gate"],
+  gateSizeLabel: "Gate Size",
+  rangeTip: "💡 **Gate Size** sets how far each gate reaches (e.g. 0.75 m). **Max Move / Still Gate** cap the farthest gate used to detect moving vs. still targets — lower them to ignore distant motion.",
+  gateTip: "💡 Each gate's **move / still threshold** is how strong a signal must be to count as presence at that distance. Lower = more sensitive (more false triggers), higher = less. Turn on **Radar Engineering Mode** and watch the Gate Energy chart while you move around to pick values.",
+  wikiUrl: "https://wiki.apolloautomation.com/products/msr2/setup/zones-ha/",
+  entityMap(base) {
+    const gates = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const g = (suffix) => gates.map((n) => suffix(n));
+    return {
+      engineering_mode: `switch.${base}_radar_engineering_mode`,
+      bluetooth: `switch.${base}_ld2410_bluetooth`,
+      restart_radar: `button.${base}_restart_radar`,
+      factory_reset_radar: `button.${base}_factory_reset_radar`,
+      esp_reboot: `button.${base}_esp_reboot`,
+      radar_timeout: `number.${base}_radar_timeout`,
+      zone_1_start: `number.${base}_radar_zone_1_start`,
+      end_zone_1: `number.${base}_radar_end_zone_1`,
+      end_zone_2: `number.${base}_radar_end_zone_2`,
+      end_zone_3: `number.${base}_radar_end_zone_3`,
+      max_move_distance: `number.${base}_radar_max_move_distance`,
+      max_still_distance: `number.${base}_radar_max_still_distance`,
+      gate_size: `select.${base}_ld2410_gate_size`,
+      move_threshold: g((n) => `number.${base}_g${n}_move_threshold`),
+      still_threshold: g((n) => `number.${base}_g${n}_still_threshold`),
+      move_energy: g((n) => `sensor.${base}_g${n}_move_energy`),
+      still_energy: g((n) => `sensor.${base}_g${n}_still_energy`),
+      still_distance: `sensor.${base}_radar_still_distance`,
+      moving_distance: `sensor.${base}_radar_moving_distance`,
+      detection_distance: `sensor.${base}_radar_detection_distance`,
+      radar_target: `binary_sensor.${base}_radar_target`,
+      moving_target: `binary_sensor.${base}_radar_moving_target`,
+      still_target: `binary_sensor.${base}_radar_still_target`,
+      zone_1_occupancy: `binary_sensor.${base}_radar_zone_1_occupancy`,
+      zone_2_occupancy: `binary_sensor.${base}_radar_zone_2_occupancy`,
+      zone_3_occupancy: `binary_sensor.${base}_radar_zone_3_occupancy`
+    };
+  }
+};
+const LD2412_PROFILE = {
+  key: "ld2412",
+  label: "LD2412",
+  maxBarLabels: ["Max Gate", "Min Gate"],
+  rangeLabels: ["Max Gate", "Min Gate"],
+  gateSizeLabel: "Distance Resolution",
+  rangeTip: "💡 **Distance Resolution** sets gate spacing — smaller (0.5 m) gives finer tuning over a shorter range, larger (0.75 m) reaches farther. **Min / Max Gate** limit which gates are used for detection.",
+  gateTip: "💡 Each gate's **move / still threshold** is how strong a signal must be to count as presence at that distance. Lower = more sensitive (more false triggers), higher = less. Turn on **Radar Engineering Mode** and watch the Gate Energy chart while you move around to pick values.",
+  wikiUrl: "https://wiki.apolloautomation.com/products/rpro1/setup/zones-ha/#ld2412-configuration",
+  entityMap(base) {
+    const gates = Array.from({ length: 14 }, (_, i) => i);
+    const pad = (n) => String(n).padStart(2, "0");
+    const g = (suffix) => gates.map((n) => suffix(pad(n)));
+    return {
+      engineering_mode: `switch.${base}_ld2412_engineering_mode`,
+      bluetooth: `switch.${base}_ld2412_bluetooth`,
+      restart_radar: `button.${base}_ld2412_restart`,
+      factory_reset_radar: `button.${base}_ld2412_factory_reset`,
+      esp_reboot: `button.${base}_esp_reboot`,
+      radar_timeout: `number.${base}_ld2412_timeout`,
+      ...emptyZones(),
+      max_move_distance: `number.${base}_ld2412_max_distance_gate`,
+      max_still_distance: `number.${base}_ld2412_min_distance_gate`,
+      gate_size: `select.${base}_ld2412_distance_resolution`,
+      move_threshold: g((p) => `number.${base}_ld2412_g${p}_move_threshold`),
+      still_threshold: g((p) => `number.${base}_ld2412_g${p}_still_threshold`),
+      move_energy: g((p) => `sensor.${base}_ld2412_g${p}_move_energy`),
+      still_energy: g((p) => `sensor.${base}_ld2412_g${p}_still_energy`),
+      // LD2412 distance sensors don't report usable values, so no distance bars
+      // are shown — the chart is the gate range + min/max gate only.
+      still_distance: void 0,
+      moving_distance: void 0,
+      detection_distance: void 0,
+      radar_target: `binary_sensor.${base}_ld2412_presence`,
+      moving_target: `binary_sensor.${base}_ld2412_moving_target`,
+      still_target: `binary_sensor.${base}_ld2412_still_target`
+    };
+  }
+};
+const APOLLO_MODELS = [
+  { prefix: "msr-1", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "msr-2", profile: LD2410_PROFILE, ld2450: false },
+  { prefix: "mtr-1", ld2450: true },
+  { prefix: "r-pro-1", profile: LD2412_PROFILE, ld2450: true }
+];
+function apolloModelInfo(device) {
+  if (!(device == null ? void 0 : device.manufacturer) || !device.model) return void 0;
+  if (device.manufacturer.toLowerCase() !== "apolloautomation") return void 0;
+  const model = device.model.toLowerCase();
+  const hit = APOLLO_MODELS.find((m) => model.startsWith(m.prefix));
+  return hit ? { profile: hit.profile, ld2450: hit.ld2450 } : void 0;
+}
 const ZONE_MAP_CARD_TYPE = "custom:apollo-radar-zone-map-card";
 const ZONE_MAP_EDITOR_TAG = "apollo-radar-zone-map-card-editor";
+function themeChoiceFromConfig(config) {
+  if (config.dark_mode === void 0) return "auto";
+  return config.dark_mode ? "dark" : "light";
+}
+const THEME_SELECTOR = {
+  select: {
+    mode: "dropdown",
+    options: [
+      { value: "auto", label: "Follow Home Assistant theme" },
+      { value: "light", label: "Light" },
+      { value: "dark", label: "Dark" }
+    ]
+  }
+};
 function firstLd2450DeviceId(hass) {
   if (!hass) return void 0;
   const fromRegistry = Object.keys(hass.devices ?? {});
@@ -176,12 +295,15 @@ class ZoneMapCardEditor extends HTMLElement {
   }
   _render() {
     this._build();
-    if (!this._picker || !this._title) return;
+    if (!this._picker || !this._title || !this._theme) return;
     this._picker.hass = this._hass;
+    this._theme.hass = this._hass;
     const deviceId = String(this._config.device_id ?? "");
     const title = String(this._config.title ?? "");
+    const theme = themeChoiceFromConfig(this._config);
     if (this._picker.value !== deviceId) this._picker.value = deviceId;
     if (this._title.value !== title) this._title.value = title;
+    if (this._theme.value !== theme) this._theme.value = theme;
   }
   /** The DOM is built once and then updated. HA sets `hass` on every state
    *  tick, and rebuilding under the user would drop focus mid-word. */
@@ -193,7 +315,10 @@ class ZoneMapCardEditor extends HTMLElement {
     form.className = "form";
     const picker = document.createElement("ha-device-picker");
     picker.label = "Radar";
-    picker.deviceFilter = (device) => !!this._hass && !!(device == null ? void 0 : device.id) && hasLd2450Device(this._hass, device.id);
+    picker.deviceFilter = (device) => {
+      var _a, _b;
+      return !!this._hass && !!(device == null ? void 0 : device.id) && (hasLd2450Device(this._hass, device.id) || (((_b = apolloModelInfo((_a = this._hass.devices) == null ? void 0 : _a[device.id])) == null ? void 0 : _b.ld2450) ?? false));
+    };
     picker.addEventListener("value-changed", (event) => {
       var _a;
       const value = (_a = event.detail) == null ? void 0 : _a.value;
@@ -205,13 +330,35 @@ class ZoneMapCardEditor extends HTMLElement {
       var _a;
       this._commit("title", String(((_a = this._title) == null ? void 0 : _a.value) ?? ""));
     });
+    const theme = document.createElement("ha-selector");
+    theme.label = "Appearance";
+    theme.selector = THEME_SELECTOR;
+    theme.addEventListener("value-changed", (event) => {
+      var _a;
+      event.stopPropagation();
+      const value = (_a = event.detail) == null ? void 0 : _a.value;
+      this._commitTheme(
+        value === "light" || value === "dark" ? value : "auto"
+      );
+    });
     const hint = document.createElement("div");
     hint.className = "hint";
     hint.textContent = "The card tracks this radar's own detected targets. To point it at other X/Y sensors, call the apollo_mmwave.update_zone service with an entities list.";
-    form.append(picker, title, hint);
+    form.append(picker, title, theme, hint);
     this.shadowRoot.append(style, form);
     this._picker = picker;
     this._title = title;
+    this._theme = theme;
+  }
+  /** Fold the appearance choice into `dark_mode`: "auto" drops the key so the
+   *  card follows the Home Assistant theme again. */
+  _commitTheme(choice) {
+    if (themeChoiceFromConfig(this._config) === choice) return;
+    const config = { ...this._config };
+    if (choice === "auto") delete config.dark_mode;
+    else config.dark_mode = choice === "dark";
+    this._config = config;
+    this._emit(config);
   }
   /**
    * Fold one field into the config and hand the whole thing to Lovelace.
@@ -226,6 +373,9 @@ class ZoneMapCardEditor extends HTMLElement {
     const config = { ...this._config, [key]: value };
     if (key === "title" && value === "") delete config.title;
     this._config = config;
+    this._emit(config);
+  }
+  _emit(config) {
     this.dispatchEvent(
       new CustomEvent("config-changed", {
         detail: { config },

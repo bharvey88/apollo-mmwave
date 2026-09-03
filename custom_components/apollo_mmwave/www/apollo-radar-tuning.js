@@ -709,6 +709,8 @@ const KNOWN_SUFFIXES = [
   // LD2450 tracking radar — every entity is `{base}_ld2450_...`. Needed so
   // zone-only devices (e.g. MTR-1, no gate radar) still resolve to a base name.
   /_ld2450_.+$/,
+  // MTR-1 firmware names its target sensors "Target-1 X" with no chip prefix.
+  /_target_\d+_[xy](?:_\d+)?$/,
   // LD2410 (MSR) — varied prefixes.
   /_radar_engineering_mode$/,
   /_ld2410_bluetooth$/,
@@ -1469,8 +1471,8 @@ function ld2450TargetPairs(base) {
     y: `sensor.${base}_ld2450_target_${n3}_y`
   }));
 }
-const TARGET_X = /_ld2450_target_(\d+)_x(?:_\d+)?$/;
-const TARGET_Y = /_ld2450_target_(\d+)_y(?:_\d+)?$/;
+const TARGET_X = /(?:_ld2450)?_target_(\d+)_x(?:_\d+)?$/;
+const TARGET_Y = /(?:_ld2450)?_target_(\d+)_y(?:_\d+)?$/;
 function ld2450EntityIds(hass, deviceId) {
   const ids = [];
   for (const [id, e2] of Object.entries(hass.entities)) {
@@ -1488,7 +1490,7 @@ function hasLd2450Device(hass, deviceId) {
   return false;
 }
 function hasLd2450(hass, base) {
-  return ld2450TargetPairs(base).some((p2) => p2.x in hass.states);
+  return ld2450TargetPairs(base).some((p2) => p2.x in hass.states) || [1, 2, 3].some((n3) => `sensor.${base}_target_${n3}_x` in hass.states);
 }
 function zoneMapCard(deviceId, title) {
   return {
@@ -1805,10 +1807,22 @@ function radarDeviceKey(hass, config) {
 }
 function shouldRegenerate(config, oldHass, newHass) {
   if (oldHass.devices === newHass.devices && oldHass.entities === newHass.entities) {
-    return false;
+    if (!availabilityChanged(oldHass, newHass)) return false;
   }
   const cfg = config ?? {};
   return radarDeviceKey(oldHass, cfg) !== radarDeviceKey(newHass, cfg);
+}
+function isUnavailable(state) {
+  return state === void 0 || state.state === "unavailable";
+}
+function availabilityChanged(oldHass, newHass) {
+  for (const id in newHass.states) {
+    const next = newHass.states[id];
+    const prev = oldHass.states[id];
+    if (prev === next) continue;
+    if (isUnavailable(prev) !== isUnavailable(next)) return true;
+  }
+  return false;
 }
 const EMPTY_VIEW = {
   title: "Apollo Radar Tuning",

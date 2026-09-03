@@ -42,7 +42,7 @@ async function subscribeEntryLoads(hass, callback) {
         if (list.some(
           (change) => {
             var _a, _b;
-            return ((_a = change == null ? void 0 : change.entry) == null ? void 0 : _a.domain) === DOMAIN && ((_b = change == null ? void 0 : change.entry) == null ? void 0 : _b.state) === "loaded";
+            return ((change == null ? void 0 : change.type) === "updated" || (change == null ? void 0 : change.type) === "added") && ((_a = change == null ? void 0 : change.entry) == null ? void 0 : _a.domain) === DOMAIN && ((_b = change == null ? void 0 : change.entry) == null ? void 0 : _b.state) === "loaded";
           }
         )) {
           callback();
@@ -90,11 +90,19 @@ async function connectZones(hass, deviceId, handlers) {
     await closeZones();
     let pushed = false;
     try {
-      unsubscribeZones = await subscribeZones(hass, deviceId, (config2) => {
+      const unsubscribe = await subscribeZones(hass, deviceId, (config2) => {
         if (disposed) return;
         pushed = true;
         handlers.onConfig(config2);
       });
+      if (disposed) {
+        try {
+          await unsubscribe();
+        } catch {
+        }
+        return;
+      }
+      unsubscribeZones = unsubscribe;
       const config = await fetchZones(hass, deviceId);
       retryIndex = 0;
       if (disposed || pushed) return;
@@ -106,19 +114,24 @@ async function connectZones(hass, deviceId, handlers) {
       if (willRetry) scheduleRetry();
     }
   };
+  let queue = Promise.resolve();
+  const requestOpen = () => {
+    queue = queue.then(open);
+    return queue;
+  };
   const scheduleRetry = () => {
     if (disposed || retryIndex >= RETRY_DELAYS_MS.length) return;
     const delay = RETRY_DELAYS_MS[retryIndex];
     retryIndex += 1;
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      void open();
+      void requestOpen();
     }, delay);
   };
-  await open();
+  await requestOpen();
   const unsubscribeEntries = await subscribeEntryLoads(hass, () => {
     if (disposed) return;
-    void open();
+    void requestOpen();
   });
   return async () => {
     disposed = true;
@@ -690,13 +703,19 @@ class ZoneMapCard extends HTMLElement {
   }
   connectedCallback() {
     this._connectZones();
+    if (this.canvas && !this._onKeyDown) this._attachGlobalListeners();
   }
   _connectZones() {
     if (this._zoneConnection || !this._hass || !this.deviceId) return;
-    this._zoneConnection = connectZones(this._hass, this.deviceId, {
-      onConfig: (config) => this._applyZoneConfig(config),
-      onError: (message) => this._setLoadError(message)
+    const connection = connectZones(this._hass, this.deviceId, {
+      onConfig: (config) => {
+        if (this._zoneConnection === connection) this._applyZoneConfig(config);
+      },
+      onError: (message) => {
+        if (this._zoneConnection === connection) this._setLoadError(message);
+      }
     });
+    this._zoneConnection = connection;
   }
   _disconnectZones() {
     const pending2 = this._zoneConnection;
@@ -1116,6 +1135,20 @@ class ZoneMapCard extends HTMLElement {
         this.finishPolygon();
       }
     });
+    this._attachGlobalListeners();
+    const canvasContainer = this.canvas.parentElement;
+    if (canvasContainer) {
+      canvasContainer.addEventListener("mouseleave", () => {
+        if (this.isDrawing) this.cancelDrawing();
+      });
+    }
+  }
+  /** The window and document listeners. Separate from the canvas ones because
+   *  `disconnectedCallback` removes exactly these, and a re-attached card has
+   *  to get them back without re-wiring a canvas that never lost its own. */
+  _attachGlobalListeners() {
+    if (!this.canvas) return;
+    this._detachGlobalListeners();
     this._onKeyDown = (event) => {
       if (this.drawMode !== DRAW_MODES.POLYGON) return;
       if (event.key === "Escape") {
@@ -1137,11 +1170,6 @@ class ZoneMapCard extends HTMLElement {
     };
     document.addEventListener("mousedown", this._outsideClickHandler, true);
     document.addEventListener("touchstart", this._outsideClickHandler, true);
-    if (canvasContainer) {
-      canvasContainer.addEventListener("mouseleave", () => {
-        if (this.isDrawing) this.cancelDrawing();
-      });
-    }
   }
   _attachConeControls() {
     const angleSlider = this.shadowRoot.getElementById("coneAngleSlider");

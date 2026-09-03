@@ -712,28 +712,30 @@ const KNOWN_SUFFIXES = [
   // MTR-1 firmware names its target sensors "Target-1 X" with no chip prefix.
   /_target_\d+_[xy](?:_\d+)?$/,
   // LD2410 (MSR) — varied prefixes.
-  /_radar_engineering_mode$/,
-  /_ld2410_bluetooth$/,
-  /_restart_radar$/,
-  /_factory_reset_radar$/,
-  /_esp_reboot$/,
-  /_radar_timeout$/,
-  /_radar_zone_\d+_start$/,
-  /_radar_end_zone_\d+$/,
-  /_radar_max_move_distance$/,
-  /_radar_max_still_distance$/,
-  /_ld2410_gate_size$/,
-  /_g\d+_move_threshold$/,
-  /_g\d+_still_threshold$/,
-  /_g\d+_move_energy$/,
-  /_g\d+_still_energy$/,
-  /_radar_still_distance$/,
-  /_radar_moving_distance$/,
-  /_radar_detection_distance$/,
-  /_radar_moving_target$/,
-  /_radar_still_target$/,
-  /_radar_target$/,
-  /_radar_zone_\d+_occupancy$/
+  /_radar_engineering_mode(?:_\d+)?$/,
+  /_ld2410_bluetooth(?:_\d+)?$/,
+  /_radar_control_bluetooth(?:_\d+)?$/,
+  /_radar_distance_resolution(?:_\d+)?$/,
+  /_restart_radar(?:_\d+)?$/,
+  /_factory_reset_radar(?:_\d+)?$/,
+  /_esp_reboot(?:_\d+)?$/,
+  /_radar_timeout(?:_\d+)?$/,
+  /_radar_zone_\d+_start(?:_\d+)?$/,
+  /_radar_end_zone_\d+(?:_\d+)?$/,
+  /_radar_max_move_distance(?:_\d+)?$/,
+  /_radar_max_still_distance(?:_\d+)?$/,
+  /_ld2410_gate_size(?:_\d+)?$/,
+  /_g\d+_move_threshold(?:_\d+)?$/,
+  /_g\d+_still_threshold(?:_\d+)?$/,
+  /_g\d+_move_energy(?:_\d+)?$/,
+  /_g\d+_still_energy(?:_\d+)?$/,
+  /_radar_still_distance(?:_\d+)?$/,
+  /_radar_moving_distance(?:_\d+)?$/,
+  /_radar_detection_distance(?:_\d+)?$/,
+  /_radar_moving_target(?:_\d+)?$/,
+  /_radar_still_target(?:_\d+)?$/,
+  /_radar_target(?:_\d+)?$/,
+  /_radar_zone_\d+_occupancy(?:_\d+)?$/
 ];
 function baseFromObjectId(objectId) {
   for (const re of KNOWN_SUFFIXES) {
@@ -768,6 +770,9 @@ const SCALAR_PATTERNS = [
   // LD2410 (MSR) naming.
   S2("engineering_mode", "switch", "_radar_engineering_mode"),
   S2("bluetooth", "switch", "_ld2410_bluetooth"),
+  // MSR-1 firmware spells these two differently from the MSR-2.
+  S2("bluetooth", "switch", "_radar_control_bluetooth"),
+  S2("gate_size", "select", "_radar_distance_resolution"),
   S2("restart_radar", "button", "_restart_radar"),
   S2("factory_reset_radar", "button", "_factory_reset_radar"),
   S2("esp_reboot", "button", "_esp_reboot"),
@@ -1776,18 +1781,22 @@ function buildDeviceSections(hass, dev, distanceUnit) {
   }
   return columns.map((col) => col.filter(Boolean)).filter((col) => col.length > 0).map((cards) => ({ type: "grid", cards }));
 }
-function deviceView(hass, dev, distanceUnit) {
+function deviceView(hass, dev, distanceUnit, path = dev.base) {
   return {
     title: dev.name,
-    path: dev.base,
+    path,
     type: "sections",
     sections: buildDeviceSections(hass, dev, distanceUnit)
   };
 }
 function generateViews(hass, config) {
-  return strategyDevices(hass, config).map(
-    (d2) => deviceView(hass, d2, config.distance_unit)
-  );
+  const used = /* @__PURE__ */ new Set();
+  return strategyDevices(hass, config).map((d2) => {
+    let path = d2.base;
+    if (used.has(path)) path = `${d2.base}_${d2.deviceId}`;
+    used.add(path);
+    return deviceView(hass, d2, config.distance_unit, path);
+  });
 }
 function generateSections(hass, config) {
   return strategyDevices(hass, config).flatMap(

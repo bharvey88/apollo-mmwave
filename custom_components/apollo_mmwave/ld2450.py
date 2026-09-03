@@ -130,19 +130,30 @@ def async_track_target_pairs(hass: HomeAssistant) -> CALLBACK_TYPE:
             ]
         )
 
+    unsub_started: CALLBACK_TYPE | None = None
+
     @callback
     def _started(_event: Event[Any]) -> None:
+        # A one-shot listener removes itself when it fires. Removing it again
+        # from the teardown logs "Unable to remove unknown job listener" at
+        # error level on every reload after boot, so forget it here.
+        nonlocal unsub_started
+        unsub_started = None
         _invalidate(list(cache))
 
     unsub_registry = hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, _registry_updated
     )
-    unsub_started = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
+    if not hass.is_running:
+        unsub_started = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, _started
+        )
 
     @callback
     def _unsubscribe() -> None:
         unsub_registry()
-        unsub_started()
+        if unsub_started is not None:
+            unsub_started()
         hass.data.get(DOMAIN, {}).pop(DATA_PAIR_CACHE, None)
 
     return _unsubscribe

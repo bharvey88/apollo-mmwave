@@ -246,3 +246,33 @@ async def test_taken_over_dashboard_is_never_overwritten_or_deleted(
     await hass.async_block_till_done()
     assert DASHBOARD_URL_PATH in hass.data[LOVELACE_DATA].dashboards
     assert await _dashboard_config(hass) == mine
+
+
+async def test_user_added_strategy_options_survive_a_re_register(
+    hass, dashboard_entry
+) -> None:
+    """`distance_unit` typed into the raw editor is not ours to erase."""
+    await setup_integration(hass, dashboard_entry)
+    dashboard = hass.data[LOVELACE_DATA].dashboards[DASHBOARD_URL_PATH]
+    await dashboard.async_save(
+        {"strategy": {"type": DASHBOARD_STRATEGY_TYPE, "distance_unit": "ft"}}
+    )
+
+    # A restart or an options change re-registers with a device selection.
+    await async_register_dashboard(hass, ["dev1"])
+    await hass.async_block_till_done()
+    stored = await _dashboard_config(hass)
+    assert stored["strategy"] == {
+        "type": DASHBOARD_STRATEGY_TYPE,
+        "distance_unit": "ft",
+        "devices": ["dev1"],
+    }
+
+    # Clearing the selection drops `devices` and keeps the user's key.
+    await async_register_dashboard(hass, [])
+    await hass.async_block_till_done()
+    stored = await _dashboard_config(hass)
+    assert stored["strategy"] == {
+        "type": DASHBOARD_STRATEGY_TYPE,
+        "distance_unit": "ft",
+    }

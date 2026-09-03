@@ -158,8 +158,14 @@ def ws_subscribe_zones(
 
     @callback
     def _forward(changed_device_id: str) -> None:
-        if changed_device_id == device_id:
-            connection.send_event(msg["id"], _payload(hass, device_id))
+        if changed_device_id != device_id:
+            return
+        # The unload pops the store before the entry's teardown callbacks close
+        # this subscription, and a registry update in that gap would otherwise
+        # build a payload from a store that is no longer there.
+        if DATA_STORE not in hass.data.get(DOMAIN, {}):
+            return
+        connection.send_event(msg["id"], _payload(hass, device_id))
 
     unsub_dispatcher = async_dispatcher_connect(hass, SIGNAL_ZONES_UPDATED, _forward)
 

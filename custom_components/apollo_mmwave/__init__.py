@@ -390,6 +390,41 @@ def _apply_entity_pairs(device: dict[str, Any], call: ServiceCall) -> None:
         device[STORE_ENTITIES] = entities
 
 
+def _call_changes_something(
+    call: ServiceCall, device_id: str, rotation: int | None
+) -> bool:
+    """Refuse the schema-legal calls that would change nothing, and say why."""
+    zone_id = call.data.get("zone_id")
+    if call.data.get("delete") and zone_id is None:
+        _LOGGER.warning(
+            "Apollo mmWave: update_zone was asked to delete a zone on device"
+            " '%s' without a zone_id; nothing was changed.",
+            device_id,
+        )
+        return False
+    if call.data.get("data") is not None and call.data.get("shape") is None:
+        _LOGGER.warning(
+            "Apollo mmWave: update_zone for device '%s' carried zone data"
+            " without a shape, so the data was ignored.",
+            device_id,
+        )
+    if (
+        rotation is not None
+        or call.data.get("clear_entities")
+        or _normalize_entities(call.data.get("entities")) is not None
+        or zone_id is not None
+    ):
+        return True
+    # `store.device()` is a setdefault: reading it for this call would mint a
+    # permanent, empty entry for a radar the call never configured.
+    _LOGGER.warning(
+        "Apollo mmWave: update_zone for device '%s' carried nothing to change;"
+        " nothing was changed.",
+        device_id,
+    )
+    return False
+
+
 def _build_update_zone_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
@@ -405,6 +440,9 @@ def _build_update_zone_handler(
         rotation = _sanitize_rotation(call.data.get(ATTR_ROTATION_DEG))
         zone_name = _coerce_zone_name(call.data.get("name"))
         delete_zone = bool(call.data.get("delete"))
+
+        if not _call_changes_something(call, device_id, rotation):
+            return
 
         device = store.device(device_id)
 

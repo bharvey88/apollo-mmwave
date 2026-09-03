@@ -382,3 +382,34 @@ async def test_unload_removes_service(hass, init_integration) -> None:
     assert await hass.config_entries.async_unload(init_integration.entry_id)
     await hass.async_block_till_done()
     assert not hass.services.has_service(DOMAIN, SERVICE_UPDATE_ZONE)
+
+
+async def test_call_with_nothing_to_change_mints_no_store_entry(
+    hass, init_integration, device_id, caplog
+) -> None:
+    """A device_id alone must not create a permanent empty store entry."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN, SERVICE_UPDATE_ZONE, {"device_id": device_id}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert device_id not in get_store(hass).devices
+    assert "carried nothing to change" in caplog.text
+
+
+async def test_delete_without_zone_id_changes_nothing(
+    hass, init_integration, device_id, caplog
+) -> None:
+    """`delete: true` with no zone_id is refused instead of reinterpreted."""
+    _ = init_integration
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, "delete": True, "rotation_deg": 45},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert device_id not in get_store(hass).devices
+    assert "without a zone_id" in caplog.text

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers.entity_registry import RegistryEntryDisabler
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.apollo_mmwave.ld2450 import (
+    async_track_target_pairs,
     effective_target_pairs,
     resolve_target_pairs,
 )
@@ -230,3 +232,24 @@ async def test_effective_target_pairs_does_not_create_a_store_entry(
     # A setdefault read here would leave a permanent entry for a device nobody
     # has configured, which is the phantom-entry bug this release exists to fix.
     assert store.devices == {}
+
+
+async def test_unloading_after_startup_logs_no_listener_error(
+    hass, config_entry, esphome_device, caplog
+) -> None:
+    """The one-shot STARTED listener must not be removed twice on reload."""
+    _ = esphome_device
+
+    unsubscribe = async_track_target_pairs(hass)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    unsubscribe()
+
+    assert "Unable to remove unknown job listener" not in caplog.text
+
+    # And once Home Assistant is already running there is nothing to wait for.
+    _ = config_entry
+    assert hass.is_running
+    unsubscribe = async_track_target_pairs(hass)
+    unsubscribe()
+    assert "Unable to remove unknown job listener" not in caplog.text

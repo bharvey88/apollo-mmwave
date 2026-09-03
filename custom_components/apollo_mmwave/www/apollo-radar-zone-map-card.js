@@ -665,8 +665,9 @@ class ZoneMapCard extends HTMLElement {
    */
   async _saveZoneUpdate(payload, successMessage) {
     if (!this._hass) return false;
+    const request = { ...payload, input_units: this.inputUnits };
     try {
-      await this._hass.callService("apollo_mmwave", "update_zone", payload);
+      await this._hass.callService("apollo_mmwave", "update_zone", request);
     } catch (error) {
       const reason = (error == null ? void 0 : error.message) ? String(error.message) : "Home Assistant rejected it.";
       this._notify(`Could not save: ${reason}`);

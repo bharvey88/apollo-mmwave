@@ -37,11 +37,13 @@ from .const import (
     ATTR_X_MIN,
     ATTR_Y_MAX,
     ATTR_Y_MIN,
+    INPUT_UNIT_FACTORS,
     POLYGON_MIN_POINTS,
     SIGNAL_ZONES_UPDATED,
-    STORE_ZONES,
+    STORE_INPUT_UNITS,
 )
 from .ld2450 import effective_target_pairs
+from .zone_entities import ZoneEntityMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -161,36 +163,21 @@ async def async_setup_entry(
 ) -> None:
     """Create presence sensors for stored zones, and for zones added later."""
     from . import get_store  # noqa: PLC0415 - avoid a module import cycle
+    from .zone_entities import async_setup_zone_platform  # noqa: PLC0415
 
     store = get_store(hass)
-    added: set[tuple[str, int]] = set()
-
-    def _sync_entities() -> None:
-        current = {
-            (device_id, zone_id)
-            for device_id, device in store.devices.items()
-            for zone_id in device[STORE_ZONES]
-        }
-        added.intersection_update(current)
-        new_entities = [
-            ZonePresenceBinarySensor(hass, store, device_id, zone_id)
-            for device_id, zone_id in sorted(current - added)
-        ]
-        added.update(current - added)
-        if new_entities:
-            async_add_entities(new_entities)
-
-    @callback
-    def _zones_updated(_device_id: str) -> None:
-        _sync_entities()
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ZONES_UPDATED, _zones_updated)
+    async_setup_zone_platform(
+        hass,
+        entry,
+        "binary_sensor",
+        lambda device_id, zone_id: ZonePresenceBinarySensor(
+            hass, store, device_id, zone_id
+        ),
+        async_add_entities,
     )
-    _sync_entities()
 
 
-class ZonePresenceBinarySensor(BinarySensorEntity):
+class ZonePresenceBinarySensor(ZoneEntityMixin, BinarySensorEntity):
     """Occupancy: any tracked target inside this zone's shape."""
 
     _attr_should_poll = False
@@ -226,6 +213,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Track zone updates and the device's coordinate entities."""
+        await super().async_added_to_hass()
 
         # The signal also carries registry changes to the radar's own target
         # sensors, which is how a zone whose LD2450 entities land after this one
@@ -248,6 +236,7 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         if self._unsub_state_listener:
             self._unsub_state_listener()
             self._unsub_state_listener = None
+        await super().async_will_remove_from_hass()
 
     def _tracked_pairs(self) -> list[dict[str, str]]:
         return effective_target_pairs(self.hass, self._store, self._device_id)
@@ -325,7 +314,13 @@ class ZonePresenceBinarySensor(BinarySensorEntity):
         # Ignore origin (0,0) so default or uninitialized readings are skipped.
         if x_val == 0.0 and y_val == 0.0:
             return None
-        return x_val, y_val
+        # Zone geometry is millimetres. The card scales readings by the
+        # device's configured input unit before drawing them, so this has to
+        # scale the same way or a target the card shows inside a zone reads
+        # "off" here. Absent means millimetres, which Apollo firmware reports.
+        units = (self._store.devices.get(self._device_id) or {}).get(STORE_INPUT_UNITS)
+        factor = INPUT_UNIT_FACTORS.get(units, 1.0) if isinstance(units, str) else 1.0
+        return x_val * factor, y_val * factor
 
     @staticmethod
     def _states_are_valid(x_state: State | None, y_state: State | None) -> bool:

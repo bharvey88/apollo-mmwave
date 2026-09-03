@@ -73,6 +73,12 @@ finished loading. To actually empty the list, pass `clear_entities: true`.
 
 ### What happens for you
 
+**Zone presence follows the card's units.** A card configured with
+`input_units` other than millimetres (DIY hardware only; Apollo firmware reports
+millimetres) tells the integration which unit the target sensors use on every
+save, and the zone presence sensors scale readings the same way. The
+`apollo_mmwave.update_zone` service takes `input_units` directly as well.
+
 **Target sensors are found automatically.** The card's old "Device and Targets"
 picker is gone. The integration locates the radar's LD2450 X/Y target sensors
 itself, so an R-PRO-1 or MTR-1 tracks targets with nothing selected by hand. If

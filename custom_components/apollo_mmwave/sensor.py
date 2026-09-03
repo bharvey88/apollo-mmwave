@@ -24,9 +24,9 @@ from .const import (
     ATTR_ROTATION_DEG,
     ATTR_SHAPE,
     SIGNAL_ZONES_UPDATED,
-    STORE_ZONES,
 )
 from .ld2450 import effective_target_pairs
+from .zone_entities import ZoneEntityMixin
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -45,38 +45,19 @@ async def async_setup_entry(
 ) -> None:
     """Create geometry sensors for stored zones, and for zones added later."""
     from . import get_store  # noqa: PLC0415 - avoid a module import cycle
+    from .zone_entities import async_setup_zone_platform  # noqa: PLC0415
 
     store = get_store(hass)
-    added: set[tuple[str, int]] = set()
-
-    def _sync_entities() -> None:
-        current = {
-            (device_id, zone_id)
-            for device_id, device in store.devices.items()
-            for zone_id in device[STORE_ZONES]
-        }
-        # Deleted zones' entities are removed via the registry; drop them from
-        # the tracker so a re-created zone id gets a fresh entity.
-        added.intersection_update(current)
-        new_entities = [
-            ZoneCoordsSensor(hass, store, device_id, zone_id)
-            for device_id, zone_id in sorted(current - added)
-        ]
-        added.update(current - added)
-        if new_entities:
-            async_add_entities(new_entities)
-
-    @callback
-    def _zones_updated(_device_id: str) -> None:
-        _sync_entities()
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ZONES_UPDATED, _zones_updated)
+    async_setup_zone_platform(
+        hass,
+        entry,
+        "sensor",
+        lambda device_id, zone_id: ZoneCoordsSensor(hass, store, device_id, zone_id),
+        async_add_entities,
     )
-    _sync_entities()
 
 
-class ZoneCoordsSensor(SensorEntity):
+class ZoneCoordsSensor(ZoneEntityMixin, SensorEntity):
     """Exposes one zone's geometry/config to the frontend via attributes."""
 
     _attr_should_poll = False
@@ -134,6 +115,7 @@ class ZoneCoordsSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Refresh whenever this device's zones change."""
+        await super().async_added_to_hass()
 
         @callback
         def _zones_updated(device_id: str) -> None:

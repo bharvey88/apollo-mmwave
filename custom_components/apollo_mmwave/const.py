@@ -24,6 +24,19 @@ STORE_ENTITIES = "entities"
 STORE_DEVICES = "devices"
 STORE_ORPHANS = "orphans"
 STORE_LABEL = "label"
+# Unit the device's target sensors report in. The card scales readings by
+# this before drawing them over millimetre zone geometry; the presence sensor
+# has to scale the same way or the two disagree about who is inside a zone.
+# Absent means millimetres, which is what every Apollo firmware reports.
+STORE_INPUT_UNITS = "input_units"
+INPUT_UNIT_FACTORS = {
+    "mm": 1.0,
+    "cm": 10.0,
+    "m": 1000.0,
+    "in": 25.4,
+    "ft": 304.8,
+    "yd": 914.4,
+}
 
 # Attribute / data keys. Persisted coordinates are rounded to whole mm
 ATTR_SHAPE = "shape"

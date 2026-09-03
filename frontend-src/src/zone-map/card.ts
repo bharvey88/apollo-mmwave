@@ -320,8 +320,12 @@ export class ZoneMapCard extends HTMLElement {
    */
   async _saveZoneUpdate(payload, successMessage) {
     if (!this._hass) return false;
+    // The presence sensors scale target readings by the same unit this card
+    // draws them in, so every write carries it. Absent on the backend means
+    // millimetres, which is also this card's default.
+    const request = { ...payload, input_units: this.inputUnits };
     try {
-      await this._hass.callService('apollo_mmwave', 'update_zone', payload);
+      await this._hass.callService('apollo_mmwave', 'update_zone', request);
     } catch (error) {
       const reason = error?.message ? String(error.message) : 'Home Assistant rejected it.';
       this._notify(`Could not save: ${reason}`);

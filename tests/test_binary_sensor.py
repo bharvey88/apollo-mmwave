@@ -9,6 +9,7 @@ from custom_components.apollo_mmwave import get_store, ld2450
 from custom_components.apollo_mmwave.const import (
     ATTR_ROTATION_DEG,
     DOMAIN,
+    SERVICE_UPDATE_ZONE,
     SIGNAL_ZONES_UPDATED,
     STORE_ENTITIES,
     STORE_ZONES,
@@ -194,3 +195,43 @@ async def test_fallback_is_not_re_resolved_on_every_coordinate_update(
 
     assert hass.states.get(_presence_id(entity_registry, device_id)).state == "on"
     assert resolved == []
+
+
+async def test_presence_scales_readings_by_the_devices_input_units(
+    hass, entity_registry, setup_entry_with_zone
+) -> None:
+    """A card drawing in centimetres and the presence sensor must agree."""
+    device_id, _ = setup_entry_with_zone
+    presence_id = _presence_id(entity_registry, device_id)
+
+    # The zone spans y 0..2000 mm. A reading of 100 cm is inside; taken as
+    # millimetres it would be too, so use one that only fits when scaled: 150
+    # cm is 1500 mm (inside), but 150 mm is inside as well, so go the other
+    # way: 250 cm is 2500 mm (outside), while 250 mm would read inside.
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, "input_units": "cm"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    _set_target(hass, TARGET_1, 0, 250)
+    await hass.async_block_till_done()
+    assert hass.states.get(presence_id).state == "off"
+
+    _set_target(hass, TARGET_1, 0, 150)
+    await hass.async_block_till_done()
+    assert hass.states.get(presence_id).state == "on"
+
+    # Back to millimetres: 250 is inside again.
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        {"device_id": device_id, "input_units": "mm"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    _set_target(hass, TARGET_1, 0, 250)
+    await hass.async_block_till_done()
+    assert hass.states.get(presence_id).state == "on"

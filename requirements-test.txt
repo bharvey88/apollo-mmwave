@@ -4,4 +4,4 @@ pytest-homeassistant-custom-component==0.13.355
 
 # The integration's manifest depends on `frontend`, whose setup imports
 # hass_frontend. Pinned to HA 2026.8.1's package_constraints.txt.
-home-assistant-frontend==20260729.7
+home-assistant-frontend==20260826.1

@@ -1,6 +1,6 @@
 # pytest-homeassistant-custom-component pins its matching homeassistant
 # version (0.13.355 == HA 2026.8.1). Keep in lockstep with requirements.txt.
-pytest-homeassistant-custom-component==0.13.355
+pytest-homeassistant-custom-component==0.13.361
 
 # The integration's manifest depends on `frontend`, whose setup imports
 # hass_frontend. Pinned to HA 2026.8.1's package_constraints.txt.
